@@ -255,7 +255,13 @@ function renderCards() {
              alt="${s.titulo}" loading="lazy"
              onerror="this.src='${PLACEHOLDER_IMGS[s.categoria] || PLACEHOLDER_IMGS.servicios}'"/>
         <div class="card-badge">${catLabel(s.categoria)}</div>
-        <div class="card-price"><strong>$${Number(s.precio).toLocaleString('es-MX')}</strong>/${s.precio_tipo}</div>
+        <div class="card-price">${
+          esPrecioVariable(s.precio_tipo)
+            ? `<strong style="color:#E65100;">💵 A convenir</strong>`
+            : esRangoPrecio(s.precio_tipo)
+              ? `<strong>${s.precio_tipo}</strong>`
+              : `<strong>$${Number(s.precio).toLocaleString('es-MX')}</strong>/${s.precio_tipo}`
+        }</div>
       </div>
       <div class="card-body">
         <h3>${s.titulo}</h3>
@@ -305,6 +311,16 @@ function selectCat(btn) {
   document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   selectedCat = btn.dataset.cat;
+
+  // Mostrar panel de precio según categoría
+  const esGastro  = selectedCat === 'gastronomia';
+  const estandar  = document.getElementById('precio-estandar-panel');
+  const rango     = document.getElementById('precio-rango-panel');
+  if (estandar) estandar.style.display = esGastro ? 'none' : 'block';
+  if (rango)    rango.style.display    = esGastro ? 'block' : 'none';
+  // Limpiar preview rango
+  const prev = document.getElementById('rango-preview');
+  if (prev) prev.style.display = 'none';
 }
 function updateCount() {
   document.getElementById('char-count').textContent = document.getElementById('pub-desc').value.length + '/500';
@@ -312,11 +328,36 @@ function updateCount() {
 
 async function publishService() {
   if (!currentUser) { openModal('login'); showToast('Inicia sesión para publicar'); return; }
-  const titulo    = document.getElementById('pub-title').value.trim();
-  const precio    = parseFloat(document.getElementById('pub-price').value);
+  const titulo = document.getElementById('pub-title').value.trim();
+
+  // ── Leer tipo de precio ──────────────────────────────────
+  const selTipoEl = document.getElementById('pub-price-type');
+  const pTipoRaw  = selTipoEl ? selTipoEl.value : 'precio fijo';
+  const esVariable = pTipoRaw === 'variable (a convenir)';
+
+  // ── Leer precio según categoría y tipo ───────────────────
+  let precio, pTipo;
+
+  if (esVariable) {
+    // Precio variable → solo efectivo, precio = 0 guardado como "A convenir"
+    precio = 0;
+    pTipo  = 'variable';
+  } else if (selectedCat === 'gastronomia') {
+    const min = parseFloat(document.getElementById('pub-price-min')?.value) || 0;
+    const max = parseFloat(document.getElementById('pub-price-max')?.value) || 0;
+    if (!min || !max || min > max) {
+      showToast('⚠️ Ingresa un rango de precios válido (mínimo < máximo)'); return;
+    }
+    precio = min;
+    pTipo  = `$${min.toLocaleString('es-MX')}–$${max.toLocaleString('es-MX')} por persona`;
+  } else {
+    const priceInput = document.querySelector('#precio-estandar-panel input[type="number"]');
+    precio = priceInput ? parseFloat(priceInput.value) : 0;
+    pTipo  = pTipoRaw;
+  }
+
   const ubicacion = document.getElementById('pub-location').value;
   const desc      = document.getElementById('pub-desc').value.trim();
-  const pTipo     = document.getElementById('pub-price-type').value.toLowerCase();
   const waInput   = (document.getElementById('pub-whatsapp').value || '').trim().replace(/\D/g,'');
   const mapsUrl   = (document.getElementById('pub-maps-url').value || '').trim();
 
@@ -324,8 +365,11 @@ async function publishService() {
   const perfilTel = (currentUser.telefono || '').replace(/\D/g,'').replace(/^52/,'');
   const waFinal   = waInput || perfilTel;
 
-  if (!titulo || !selectedCat || !precio || !ubicacion || !desc) {
+  if (!titulo || !selectedCat || !ubicacion || !desc) {
     showToast('⚠️ Completa todos los campos requeridos'); return;
+  }
+  if (!esVariable && !precio) {
+    showToast('⚠️ Ingresa un precio válido'); return;
   }
   if (!mapsUrl) {
     showToast('⚠️ El enlace de Google Maps es obligatorio para aparecer en el mapa');
@@ -365,7 +409,7 @@ async function publishService() {
       imagen_url: mainURL,
       fotos_extra: extrasURLs,
       estado: 'pendiente', activo: true,
-      metodos_pago: getSelectedPayMethods()
+      metodos_pago: esVariable ? ['efectivo'] : getSelectedPayMethods()
     };
     if (mapsUrl) payload.maps_url = mapsUrl;
 
@@ -1533,8 +1577,22 @@ function openDetail(s) {
   } else if (mapsLink) {
     mapsLink.style.display = 'none';
   }
-  document.getElementById('detail-price').textContent      = '$' + Number(s.precio).toLocaleString('es-MX');
-  document.getElementById('detail-price-type').textContent = 'Por ' + s.precio_tipo;
+  const priceEl = document.getElementById('detail-price');
+  const typEl   = document.getElementById('detail-price-type');
+  if (esPrecioVariable(s.precio_tipo)) {
+    priceEl.textContent = '💵 A convenir';
+    priceEl.style.fontSize = '22px';
+    typEl.textContent = 'El precio varía según lo que consumas';
+    typEl.style.color = '#888';
+  } else if (esRangoPrecio(s.precio_tipo)) {
+    priceEl.textContent = s.precio_tipo;
+    priceEl.style.fontSize = '';
+    typEl.textContent = '';
+  } else {
+    priceEl.textContent = '$' + Number(s.precio).toLocaleString('es-MX');
+    priceEl.style.fontSize = '';
+    typEl.textContent = 'Por ' + s.precio_tipo;
+  }
   document.getElementById('detail-cat-label-sim').textContent = catLabel(s.categoria);
 
   // Proveedor
@@ -2225,6 +2283,59 @@ function esAdmin()      { return rolActual() === 'admin'; }
 function esSupervisor() { return tieneRol(['admin','supervisor']); }
 function esVendedor()   { return tieneRol(['admin','supervisor','vendedor']); }
 
+
+// ── Tipo de precio variable → solo efectivo ──────────────
+function onPriceTipoChange(sel) {
+  const esVariable = sel.value === 'variable';
+  const aviso      = document.getElementById('variable-aviso');
+  const hint       = document.getElementById('precio-tipo-hint');
+
+  if (aviso) aviso.style.display = esVariable ? 'block' : 'none';
+  if (hint)  hint.style.display  = esVariable ? 'none'  : 'block';
+
+  // Bloquear / desbloquear métodos de pago
+  const btns = document.querySelectorAll('.pay-method-btn');
+  btns.forEach(btn => {
+    const met = btn.dataset.method;
+    if (met === 'tarjeta' || met === 'acapoints') {
+      if (esVariable) {
+        // Desactivar y marcar como bloqueado
+        btn.classList.remove('active');
+        btn.disabled = true;
+        btn.style.opacity = '0.35';
+        btn.style.cursor  = 'not-allowed';
+        btn.title = 'No disponible con precio variable';
+      } else {
+        btn.disabled = false;
+        btn.style.opacity = '';
+        btn.style.cursor  = '';
+        btn.title = '';
+        btn.classList.add('active'); // re-activar
+      }
+    }
+  });
+
+  // Si es variable, asegurar que efectivo esté activo
+  if (esVariable) {
+    const efectivoBtn = document.querySelector('.pay-method-btn[data-method="efectivo"]');
+    if (efectivoBtn) efectivoBtn.classList.add('active');
+  }
+}
+
+
+// ── Helper: detectar si precio_tipo es un rango ──────────
+function esRangoPrecio(tipo) {
+  return tipo && /\$[\d,]+(–|-)\$[\d,]+/.test(tipo);
+}
+function esPrecioVariable(tipo) {
+  return tipo === 'variable' || tipo === 'variable (a convenir)';
+}
+function formatPrecio(precio, tipo) {
+  if (esPrecioVariable(tipo))  return '💵 A convenir';
+  if (esRangoPrecio(tipo))      return tipo;
+  return '$' + Number(precio).toLocaleString('es-MX') + (tipo ? ' / ' + tipo : '');
+}
+
 /* =====================================================
    SISTEMA DE PAGOS - ACACONNECT
    ===================================================== */
@@ -2633,16 +2744,26 @@ async function openPayModal() {
   const precio = Number(s.precio);
 
   // Info del servicio
-  document.getElementById('pay-service-info').innerHTML = `
+  const variableNotice = esPrecioVariable(s.precio_tipo)
+    ? `<div style="background:#fff3e0;border:1.5px solid #ffcc80;border-radius:10px;padding:10px 14px;font-size:12px;color:#e65100;margin-bottom:10px;">
+        ⚠️ <strong>Precio variable</strong> — el monto final depende de lo que consumas. Solo se acepta efectivo.
+       </div>` : '';
+  document.getElementById('pay-service-info').innerHTML = variableNotice + `
     <img src="${s.imagen_url || ''}" alt="${s.titulo}" onerror="this.src='https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=100'"/>
     <div>
       <div class="psi-title">${s.titulo}</div>
-      <div class="psi-price">$${precio.toLocaleString('es-MX')} <span style="font-size:13px;font-weight:400;color:rgba(0,128,128,.7)">/ ${s.precio_tipo}</span></div>
+      <div class="psi-price">${esRangoPrecio(s.precio_tipo)
+        ? s.precio_tipo
+        : `$${precio.toLocaleString('es-MX')} <span style="font-size:13px;font-weight:400;color:rgba(0,128,128,.7)">/ ${s.precio_tipo}</span>`
+      }</div>
     </div>`;
 
   // Métodos disponibles del servicio
-  const metodos = Array.isArray(s.metodos_pago) && s.metodos_pago.length
-    ? s.metodos_pago : ['efectivo','tarjeta','acapoints'];
+  // Si precio variable → forzar solo efectivo
+  const metodos = esPrecioVariable(s.precio_tipo)
+    ? ['efectivo']
+    : (Array.isArray(s.metodos_pago) && s.metodos_pago.length
+        ? s.metodos_pago : ['efectivo','tarjeta','acapoints']);
 
   const labels = { efectivo:'💵 Efectivo', tarjeta:'💳 Tarjeta', acapoints:'🪙 AcaPoints' };
   const selector = document.getElementById('pay-method-selector');
@@ -6210,7 +6331,7 @@ async function cargarPuntosEnMapa() {
 }
 
 function crearPopupSingle(s, cfg) {
-  const precio = s.precio ? '$' + Number(s.precio).toLocaleString('es-MX') + ' / ' + (s.precio_tipo||'') : '';
+  const precio = s.precio_tipo && esRangoPrecio(s.precio_tipo) ? s.precio_tipo : (s.precio ? '$' + Number(s.precio).toLocaleString('es-MX') + ' / ' + (s.precio_tipo||'') : '');
   const img    = s.imagen_url
     ? `<img src="${s.imagen_url}" style="width:100%;height:100px;object-fit:cover;border-radius:8px;margin-bottom:8px;" onerror="this.style.display='none'"/>`
     : '';
@@ -6517,5 +6638,29 @@ async function previewMapsCoords(url) {
       preview.style.display = 'none';
     }
   }, 800);
+}
+
+
+/* =====================================================
+   RANGO DE PRECIOS — GASTRONOMÍA
+   ===================================================== */
+
+function actualizarPreviewRango() {
+  const min  = parseFloat(document.getElementById('pub-price-min')?.value) || 0;
+  const max  = parseFloat(document.getElementById('pub-price-max')?.value) || 0;
+  const prev = document.getElementById('rango-preview');
+  if (!prev) return;
+  if (min > 0 && max > 0) {
+    const valido = max >= min;
+    prev.style.display = 'block';
+    prev.innerHTML = valido
+      ? `<div class="rango-preview-ok">
+           <span>👁️ Así verán el precio los clientes:</span>
+           <strong>$${min.toLocaleString('es-MX')} – $${max.toLocaleString('es-MX')} <span style="font-weight:400;font-size:13px;">por persona</span></strong>
+         </div>`
+      : `<div class="rango-preview-err">⚠️ El precio máximo debe ser mayor al mínimo</div>`;
+  } else {
+    prev.style.display = 'none';
+  }
 }
 
