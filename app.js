@@ -5874,14 +5874,18 @@ showPage = function(name) {
     cargarPromos();
   }
   if (name === 'about') {
-    // Esperar a que la página sea visible antes de inicializar Leaflet
-    requestAnimationFrame(() => {
-      setTimeout(() => {
-        initMapaNegocios();
-        // Forzar recalcular tamaño por si el contenedor no tenía dimensiones
-        if (_mapaInstance) _mapaInstance.invalidateSize();
-      }, 150);
-    });
+    // Esperar a que la página sea visible y Leaflet esté cargado
+    const tryInitMapa = (attempts) => {
+      if (typeof L === 'undefined') {
+        if (attempts > 0) setTimeout(() => tryInitMapa(attempts - 1), 300);
+        return;
+      }
+      initMapaNegocios().then(() => {
+        setTimeout(() => { if (_mapaInstance) _mapaInstance.invalidateSize(); }, 200);
+        setTimeout(() => { if (_mapaInstance) _mapaInstance.invalidateSize(); }, 800);
+      });
+    };
+    requestAnimationFrame(() => tryInitMapa(10));
   }
 };
 
