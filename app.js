@@ -55,6 +55,8 @@ async function supaFetch(endpoint, options = {}) {
 //  STATE
 // ═══════════════════════════════════════════════
 let currentUser = null;
+let userAcaPoints = 0;
+let userSaldoTarjeta = 0;
 let selectedCat = null;
 let activePill  = 'todos';
 let allServices = [];
@@ -363,13 +365,23 @@ async function publishService() {
     };
     if (mapsUrl) payload.maps_url = mapsUrl;
 
-    const newServicio = await supaFetch('/rest/v1/servicios', { method: 'POST', body: JSON.stringify(payload) });
+    // Verificar T&C aceptados
+    if (!document.getElementById('pub-tyc')?.checked) {
+      showToast('⚠️ Debes aceptar los Términos y Condiciones'); return;
+    }
+    const newServicio = await supaFetch('/rest/v1/servicios', { method: 'POST', body: JSON.stringify({...payload, terminos_aceptados: true}) });
+    // Guardar registro de T&C en tabla dedicada
+    supaFetch('/rest/v1/terminos_aceptados', {
+      method: 'POST',
+      body: JSON.stringify({ usuario_id: currentUser.id, version: '1.0' })
+    }).catch(()=>{});
     const newId = Array.isArray(newServicio) ? newServicio[0]?.id : newServicio?.id;
 
     // Guardar horarios y disponibilidad si el servicio fue creado
     if (newId) {
       await guardarHorariosServicio(newId);
       await guardarDisponibilidadServicio(newId);
+      guardarCoordsServicio(newId, payload.ubicacion); // coords para el mapa
     }
 
     setProgress(100);
@@ -2143,7 +2155,7 @@ async function eliminarUsuario(userId, nombre) {
 //  RESTAURAR SESIÓN AL CARGAR
 // ═══════════════════════════════════════════════
 (function restoreSession() {
-  const VALID_PAGES = ['home', 'marketplace', 'publish', 'about', 'contact'];
+  const VALID_PAGES = ['home', 'marketplace', 'publish', 'about', 'contact', 'promos'];
 
   // Restaurar usuario
   try {
@@ -2216,7 +2228,7 @@ function esVendedor()   { return tieneRol(['admin','supervisor','vendedor']); }
 // Estado global de pagos
 let selectedPayMethod = null;
 let selectedPackage = null;
-let userAcaPoints = 0;
+// userAcaPoints declarado al inicio
 
 // ── Página AcaPoints ─────────────────────────────────────
 let acapSelectedPkg = null;
@@ -2375,7 +2387,7 @@ showPage = function(name) {
 // Así el saldo es idéntico en celular, laptop y cualquier dispositivo
 // ─────────────────────────────────────────────────────────
 
-let userSaldoTarjeta = 0; // saldo de pagos con tarjeta, retirable
+// userSaldoTarjeta declarado al inicio del archivo
 
 function walletKey()       { return 'aca_wallet_' + (currentUser?.id || 'guest'); }
 function walletTarjetaKey(){ return 'aca_wt_'     + (currentUser?.id || 'guest'); }
@@ -3118,7 +3130,11 @@ function openCompraDetalle(folio) {
     </div>
 
     <div class="cd-actions">
-      <button onclick="closeMisCompras();showPage('marketplace')" class="cd-btn-secondary">
+      <button onclick="imprimirTicketPDF('${c.folio}')"
+        style="flex:1.2;padding:13px;background:linear-gradient(135deg,#0d2b2b,#005f5f);color:#fff;border:none;border-radius:12px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
+        🎫 Descargar ticket PDF
+      </button>
+      <button onclick="closeMisCompras();showPage('marketplace')" class="cd-btn-secondary" style="flex:1;">
         🛍️ Ver más servicios
       </button>
     </div>
@@ -3701,7 +3717,11 @@ function openCompraDetalle(folio) {
     </div>
 
     <div class="cd-actions">
-      <button onclick="closeMisCompras();showPage('marketplace')" class="cd-btn-secondary">
+      <button onclick="imprimirTicketPDF('${c.folio}')"
+        style="flex:1.2;padding:13px;background:linear-gradient(135deg,#0d2b2b,#005f5f);color:#fff;border:none;border-radius:12px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;">
+        🎫 Descargar ticket PDF
+      </button>
+      <button onclick="closeMisCompras();showPage('marketplace')" class="cd-btn-secondary" style="flex:1;">
         🛍️ Ver más servicios
       </button>
     </div>
@@ -5488,4 +5508,876 @@ openDetail = function(s) {
   _origOpenDetailHD(s);
   cargarHorarioDetalle(s.id);
 };
+
+
+/* =====================================================
+   TÉRMINOS Y CONDICIONES
+   ===================================================== */
+
+function toggleTyC(checkbox) {
+  const btn   = document.getElementById('btn-publicar');
+  const hint  = document.getElementById('tyc-promo-hint');
+  const box   = document.getElementById('tyc-box');
+  if (checkbox.checked) {
+    btn.disabled = false;
+    btn.style.opacity = '1'; btn.style.cursor = 'pointer';
+    hint.style.display = 'block';
+    box.style.borderColor = 'var(--teal)';
+    box.style.background  = 'rgba(0,128,128,.04)';
+  } else {
+    btn.disabled = true;
+    btn.style.opacity = '.5'; btn.style.cursor = 'not-allowed';
+    hint.style.display = 'none';
+    box.style.borderColor = ''; box.style.background = '';
+  }
+}
+
+function openTyC() {
+  generarTyCPDF();
+}
+function closeTyC() {
+  // Solo por compatibilidad con el botón × del modal (ya no se usa)
+  const ovl = document.getElementById('tyc-overlay');
+  if (ovl) ovl.style.display = 'none';
+}
+function aceptarTyC() {
+  const chk = document.getElementById('pub-tyc');
+  if (chk) { chk.checked = true; toggleTyC(chk); }
+  showToast('✅ Términos aceptados');
+}
+
+function generarTyCPDF() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  const now = new Date();
+  const fecha = now.toLocaleDateString('es-MX',{day:'2-digit',month:'long',year:'numeric'});
+
+  // Paleta
+  const DARK  = [10,31,31];
+  const TEAL  = [0,95,95];
+  const WHITE = [255,255,255];
+  const GRAY  = [100,100,100];
+  const LGRAY = [245,245,245];
+  const LTEAL = [232,245,244];
+
+  // ── Encabezado ──────────────────────────────────────
+  doc.setFillColor(...DARK);
+  doc.rect(0, 0, W, 46, 'F');
+  // Logo círculo
+  doc.setFillColor(...TEAL);
+  doc.circle(20, 23, 11, 'F');
+  doc.setTextColor(...WHITE);
+  doc.setFontSize(11); doc.setFont('helvetica','bold');
+  doc.text('AC', 20, 27, { align:'center' });
+  // Título
+  doc.setFontSize(20); doc.setFont('helvetica','bold');
+  doc.text('AcaConnect', 36, 20);
+  doc.setFontSize(10); doc.setFont('helvetica','normal');
+  doc.setTextColor(180,220,210);
+  doc.text('Términos y Condiciones de Uso', 36, 29);
+  doc.setFontSize(8); doc.setTextColor(160,200,190);
+  doc.text('Versión 1.0  ·  Vigente desde enero 2025', 36, 36);
+  // Fecha a la derecha
+  doc.setTextColor(...WHITE); doc.setFontSize(8);
+  doc.text('Generado: ' + fecha, W-14, 20, { align:'right' });
+
+  // ── Banda de aviso ──────────────────────────────────
+  doc.setFillColor(...LTEAL);
+  doc.rect(0, 46, W, 14, 'F');
+  doc.setTextColor(...TEAL); doc.setFontSize(8.5); doc.setFont('helvetica','bold');
+  doc.text(
+    '  Al publicar un servicio en AcaConnect aceptas todos los términos descritos en este documento.',
+    0, 55
+  );
+
+  let y = 68;
+  const margenL = 14, margenR = W - 14;
+  const lineaW  = margenR - margenL;
+
+  // Helper: dibujar sección
+  function seccion(titulo, puntos) {
+    // Verificar espacio
+    if (y + 8 + puntos.length * 6 > H - 18) {
+      doc.addPage();
+      y = 20;
+    }
+    // Cintillo del título
+    doc.setFillColor(...TEAL);
+    doc.roundedRect(margenL, y - 4, lineaW, 9, 2, 2, 'F');
+    doc.setTextColor(...WHITE); doc.setFontSize(9); doc.setFont('helvetica','bold');
+    doc.text(titulo, margenL + 4, y + 2);
+    y += 10;
+
+    // Párrafos / bullets
+    puntos.forEach(p => {
+      const esBullet = p.startsWith('•');
+      const texto    = esBullet ? p.slice(1).trim() : p;
+      const xBase    = esBullet ? margenL + 8 : margenL + 2;
+      const maxW     = lineaW - (esBullet ? 8 : 2);
+
+      if (esBullet) {
+        doc.setFillColor(...TEAL);
+        doc.circle(margenL + 4, y - 1, 1.2, 'F');
+      }
+
+      doc.setTextColor(60, 60, 60); doc.setFontSize(8.5); doc.setFont('helvetica', esBullet ? 'normal' : 'normal');
+      const lines = doc.splitTextToSize(texto, maxW);
+      lines.forEach(line => {
+        if (y > H - 18) { doc.addPage(); y = 20; }
+        doc.text(line, xBase, y);
+        y += 5;
+      });
+      y += 1;
+    });
+    y += 4;
+  }
+
+  // Helper: cuadro highlight
+  function cuadroInfo(texto, colorFondo, colorBorde, colorTexto) {
+    if (y + 16 > H - 18) { doc.addPage(); y = 20; }
+    doc.setFillColor(...colorFondo);
+    doc.setDrawColor(...colorBorde);
+    doc.roundedRect(margenL, y, lineaW, 14, 3, 3, 'FD');
+    doc.setTextColor(...colorTexto); doc.setFontSize(8.5); doc.setFont('helvetica','bold');
+    const lines = doc.splitTextToSize(texto, lineaW - 8);
+    lines.forEach((l, i) => { doc.text(l, margenL + 4, y + 6 + i * 5); });
+    y += 18;
+  }
+
+  // ── CONTENIDO ───────────────────────────────────────
+
+  seccion('1. Quiénes Somos', [
+    'AcaConnect es una plataforma digital de marketplace de servicios locales con sede en Acapulco de Juárez, Guerrero, México. Conectamos a proveedores de servicios verificados con clientes locales y turistas.',
+    'Operamos bajo las leyes comerciales y de protección al consumidor vigentes en el Estado de Guerrero y la República Mexicana.',
+  ]);
+
+  seccion('2. Condiciones para Vendedores', [
+    '• Debes ser mayor de 18 años y contar con identificación oficial vigente (INE/IFE).',
+    '• Tu servicio debe cumplir con la legislación vigente en el municipio de Acapulco de Juárez.',
+    '• La información publicada (precios, disponibilidad, descripción) debe ser veraz y actualizada.',
+    '• AcaConnect se reserva el derecho de rechazar o retirar publicaciones que no cumplan los estándares de calidad.',
+    '• Queda prohibida la publicación de servicios ilegales, engañosos o que atenten contra la dignidad de las personas.',
+  ]);
+
+  seccion('3. Comisiones de la Plataforma', [
+    '• Pagos con AcaPoints: margen del 15%–16% según el paquete adquirido.',
+    '• Pagos con tarjeta bancaria (simulada): comisión del 5% sobre el monto de la transacción.',
+    '• Pagos en efectivo: sin comisión de plataforma. El pago se coordina directamente con el proveedor.',
+    '• Retiro de AcaPoints: tasa de $0.80 MXN por punto (el valor de compra es $1.00 MXN por punto).',
+    '• Las comisiones pueden actualizarse con previo aviso de 15 días naturales.',
+  ]);
+
+  cuadroInfo(
+    '💡 Ejemplo: Si vendes un servicio de $500 MXN con tarjeta, AcaConnect retiene $25 MXN (5%). El vendedor recibe $475 MXN en su billetera virtual.',
+    [240,250,245], [0,95,95], [0,60,60]
+  );
+
+  seccion('4. AcaPoints — Moneda Virtual', [
+    '• AcaPoints es la moneda virtual de AcaConnect. 1 AcaPoint equivale a $1.00 MXN para realizar compras.',
+    '• La tasa de retiro a cuenta bancaria es de $0.80 MXN por AcaPoint.',
+    '• Los AcaPoints no caducan mientras la cuenta esté activa.',
+    '• AcaConnect no está obligada a convertir AcaPoints a efectivo fuera de la plataforma.',
+    '• Los AcaPoints no son transferibles entre cuentas de usuario.',
+  ]);
+
+  seccion('5. Promos y Descuentos', [
+    '• Al aceptar estos términos, el vendedor queda habilitado para crear promos entre semana (Lunes a Viernes).',
+    '• Las promos se desactivan automáticamente los sábados y domingos.',
+    '• AcaConnect no garantiza un número mínimo de ventas por promo publicada.',
+    '• El vendedor es responsable de cumplir con la oferta publicada en su promo.',
+    '• AcaConnect puede suspender una promo si recibe reportes de incumplimiento.',
+  ]);
+
+  seccion('6. Privacidad y Protección de Datos', [
+    '• Los documentos de identidad (INE, CURP, Acta de Nacimiento) se usan exclusivamente para verificación.',
+    '• No compartimos datos personales con terceros sin tu consentimiento expreso.',
+    '• Almacenamos la información de forma segura siguiendo estándares internacionales.',
+    '• Puedes solicitar la eliminación de tus datos enviando un correo a: privacidad@acaconnect.mx',
+    '• Cumplimos con la Ley Federal de Protección de Datos Personales en Posesión de Particulares (LFPDPPP).',
+  ]);
+
+  seccion('7. Responsabilidades y Límites', [
+    '• AcaConnect actúa como intermediario y no es responsable de la calidad final del servicio prestado.',
+    '• En caso de disputa entre comprador y vendedor, AcaConnect puede intervenir como mediador.',
+    '• La plataforma no se responsabiliza por daños ocasionados por información incorrecta del proveedor.',
+    '• Los pagos simulados con tarjeta son únicamente para demostración del sistema.',
+  ]);
+
+  seccion('8. Modificaciones a los Términos', [
+    '• AcaConnect puede actualizar estos términos con un aviso previo de 15 días naturales.',
+    '• El uso continuo de la plataforma después del aviso implica la aceptación de los nuevos términos.',
+    '• La versión más reciente siempre estará disponible en la plataforma.',
+  ]);
+
+  // ── Cuadro de firma / aceptación ────────────────────
+  if (y + 40 > H - 18) { doc.addPage(); y = 20; }
+  y += 4;
+  doc.setFillColor(...LGRAY);
+  doc.setDrawColor(200,200,200);
+  doc.roundedRect(margenL, y, lineaW, 34, 4, 4, 'FD');
+
+  doc.setTextColor(...DARK); doc.setFontSize(9); doc.setFont('helvetica','bold');
+  doc.text('✅  Declaración de Aceptación', margenL + 6, y + 8);
+  doc.setFont('helvetica','normal'); doc.setTextColor(...GRAY); doc.setFontSize(8);
+  const decl = 'Al marcar la casilla "Acepto los Términos y Condiciones" en la plataforma AcaConnect, el usuario declara haber leído, entendido y aceptado en su totalidad las condiciones descritas en este documento.';
+  const declLines = doc.splitTextToSize(decl, lineaW - 12);
+  declLines.forEach((l, i) => { doc.text(l, margenL + 6, y + 15 + i * 5); });
+  y += 38;
+
+  // ── Pie de página en todas las páginas ──────────────
+  const totalPags = doc.internal.getNumberOfPages();
+  for (let p = 1; p <= totalPags; p++) {
+    doc.setPage(p);
+    doc.setFillColor(...DARK);
+    doc.rect(0, H - 10, W, 10, 'F');
+    doc.setTextColor(...WHITE); doc.setFontSize(7); doc.setFont('helvetica','normal');
+    doc.text('AcaConnect © 2025 · hola@acaconnect.mx · Acapulco de Juárez, Guerrero, México', 14, H - 4);
+    doc.text(`Página ${p} de ${totalPags}`, W - 14, H - 4, { align:'right' });
+  }
+
+  doc.save('AcaConnect_Terminos_y_Condiciones_v1.0.pdf');
+  showToast('📄 PDF descargado — léelo y marca la casilla para aceptar');
+}
+
+/* =====================================================
+   PÁGINA PROMOS Y DESCUENTOS
+   ===================================================== */
+
+let _promoTipo  = 'porcentaje';
+let _todasPromos = [];
+
+// Mostrar si hoy es entre semana
+function initPromosSemana() {
+  const badge = document.getElementById('promos-semana-badge');
+  if (!badge) return;
+  const dia = new Date().getDay(); // 0=Dom,1=Lun,...,6=Sáb
+  const esEntreSemana = dia >= 1 && dia <= 5;
+  const dias = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  badge.innerHTML = esEntreSemana
+    ? `<span class="promos-activo-badge">🟢 Promos activas hoy (${dias[dia]})</span>`
+    : `<span class="promos-inactivo-badge">🔴 Promos disponibles Lun–Vie · Hoy es ${dias[dia]}</span>`;
+}
+
+async function cargarPromos() {
+  const grid = document.getElementById('promos-grid');
+  const cta  = document.getElementById('promos-cta-vendedor');
+  if (!grid) return;
+
+  // Mostrar CTA de vendedor si aplica
+  if (currentUser && tieneRol(['vendedor','admin','supervisor'])) {
+    cta.style.display = 'block';
+  }
+
+  try {
+    const data = await supaFetch(
+      '/rest/v1/promos_descuentos?activa=eq.true&order=creado_en.desc&select=*'
+    );
+    _todasPromos = data || [];
+    renderPromos(_todasPromos);
+  } catch(e) {
+    grid.innerHTML = `<p style="text-align:center;color:#aaa;padding:40px;grid-column:1/-1;">Sin promos disponibles aún.</p>`;
+  }
+}
+
+function renderPromos(promos) {
+  const grid = document.getElementById('promos-grid');
+  const dia  = new Date().getDay();
+  const esEntreSemana = dia >= 1 && dia <= 5;
+
+  if (!promos || promos.length === 0) {
+    grid.innerHTML = `
+      <div style="grid-column:1/-1;text-align:center;padding:60px 20px;">
+        <div style="font-size:48px;margin-bottom:12px;">🏷️</div>
+        <h3 style="color:#1a1a1a;margin:0 0 8px;">Sin promos por ahora</h3>
+        <p style="color:#888;font-size:14px;">Los vendedores verificados pueden crear promos entre semana.</p>
+      </div>`;
+    return;
+  }
+
+  const tipoLabel = { porcentaje:'% OFF', monto_fijo:'MXN OFF', '2x1':'2×1', '3x2':'3×2' };
+  const tipoBg    = { porcentaje:'#E53935', monto_fijo:'#1565C0', '2x1':'#2E7D32', '3x2':'#6A1B9A' };
+
+  grid.innerHTML = promos.map(p => {
+    const disponible = !p.solo_entre_semana || esEntreSemana;
+    const badge = disponible
+      ? `<span class="promo-disp-badge activa">🟢 Disponible ahora</span>`
+      : `<span class="promo-disp-badge inactiva">🔴 Solo Lun–Vie</span>`;
+    const imgSrc = p.imagen_url || 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=400&q=60';
+    const descLabel = p.descuento_tipo === 'porcentaje' ? p.descuento_valor + '% OFF'
+                    : p.descuento_tipo === 'monto_fijo' ? '$' + p.descuento_valor + ' OFF'
+                    : p.descuento_tipo;
+    const vigencia = p.fecha_fin
+      ? `Válido hasta ${new Date(p.fecha_fin).toLocaleDateString('es-MX',{day:'2-digit',month:'short'})}`
+      : 'Sin fecha límite';
+    const usos = p.limite_usos
+      ? `${p.usos_actuales||0}/${p.limite_usos} usados`
+      : '';
+
+    return `
+    <div class="promo-card ${disponible?'':'inactiva'}" onclick="${disponible?`openPromoDetalle(${p.id})`:''}">
+      <div class="promo-img-wrap">
+        <img src="${imgSrc}" alt="${p.titulo}" onerror="this.src='https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=400'"/>
+        <div class="promo-desc-badge" style="background:${tipoBg[p.descuento_tipo]||'#E53935'};">
+          ${descLabel}
+        </div>
+        ${badge}
+      </div>
+      <div class="promo-card-body">
+        <h4 class="promo-titulo">${p.titulo}</h4>
+        <p class="promo-desc">${p.descripcion||''}</p>
+        <div class="promo-precios">
+          ${p.precio_original ? `<span class="promo-precio-old">$${Number(p.precio_original).toLocaleString('es-MX')}</span>` : ''}
+          ${p.precio_promo    ? `<span class="promo-precio-new">$${Number(p.precio_promo).toLocaleString('es-MX')}</span>` : ''}
+        </div>
+        <div class="promo-meta">
+          <span>📅 ${vigencia}</span>
+          ${usos ? `<span>🔢 ${usos}</span>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function filtrarPromos(btn) {
+  document.querySelectorAll('.promo-filtro').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const cat = btn.dataset.cat;
+  if (cat === 'todos') { renderPromos(_todasPromos); return; }
+  // Filtrar por categoría del servicio (necesitaría join, usamos título como aproximación)
+  renderPromos(_todasPromos.filter(p =>
+    (p.titulo||'').toLowerCase().includes(cat) ||
+    (p.descripcion||'').toLowerCase().includes(cat)
+  ));
+}
+
+function openPromoDetalle(id) {
+  const p = _todasPromos.find(x => x.id === id);
+  if (!p) return;
+  // Abrir el servicio en el marketplace si tenemos servicio_id
+  if (p.servicio_id) {
+    showPage('marketplace');
+    setTimeout(() => {
+      const s = allServices?.find(x => x.id === p.servicio_id);
+      if (s) openDetail(s);
+    }, 300);
+  }
+}
+
+// Hook showPage para cargar promos
+const _origShowPagePromos = showPage;
+showPage = function(name) {
+  _origShowPagePromos(name);
+  if (name === 'promos') {
+    initPromosSemana();
+    cargarPromos();
+  }
+  if (name === 'about') {
+    // Esperar a que la página sea visible antes de inicializar Leaflet
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        initMapaNegocios();
+        // Forzar recalcular tamaño por si el contenedor no tenía dimensiones
+        if (_mapaInstance) _mapaInstance.invalidateSize();
+      }, 150);
+    });
+  }
+};
+
+/* =====================================================
+   CREAR PROMO (vendedores)
+   ===================================================== */
+
+async function openCrearPromo() {
+  if (!currentUser) { openModal('login'); return; }
+
+  // Verificar T&C aceptados
+  try {
+    const tyc = await supaFetch('/rest/v1/terminos_aceptados?usuario_id=eq.' + currentUser.id + '&select=id');
+    if (!tyc || tyc.length === 0) {
+      showToast('⚠️ Primero acepta los Términos y Condiciones al publicar un servicio');
+      return;
+    }
+  } catch(e) {}
+
+  // Cargar servicios del vendedor
+  try {
+    const servicios = await supaFetch(
+      '/rest/v1/servicios?usuario_id=eq.' + currentUser.id +
+      '&estado=eq.activo&select=id,titulo&order=titulo.asc'
+    );
+    const sel = document.getElementById('promo-servicio-select');
+    sel.innerHTML = '<option value="">— Selecciona un servicio —</option>' +
+      (servicios||[]).map(s => `<option value="${s.id}" data-titulo="${s.titulo}">${s.titulo}</option>`).join('');
+  } catch(e) {}
+
+  // Fecha mínima = hoy
+  const hoy = new Date().toISOString().split('T')[0];
+  document.getElementById('promo-fecha-fin').min = hoy;
+
+  _promoTipo = 'porcentaje';
+  document.getElementById('crear-promo-overlay').style.display = 'block';
+  document.body.style.overflow = 'hidden';
+}
+
+function closeCrearPromo() {
+  document.getElementById('crear-promo-overlay').style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+function selectPromoTipo(btn) {
+  document.querySelectorAll('.promo-tipo-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _promoTipo = btn.dataset.tipo;
+  const panel = document.getElementById('promo-valor-panel');
+  const hint  = document.getElementById('promo-valor-hint');
+  const input = document.getElementById('promo-valor');
+  if (_promoTipo === '2x1' || _promoTipo === '3x2') {
+    panel.style.display = 'none';
+  } else {
+    panel.style.display = 'flex';
+    hint.textContent = _promoTipo === 'porcentaje' ? '% de descuento' : 'MXN de descuento';
+    input.placeholder = _promoTipo === 'porcentaje' ? 'Ej: 20' : 'Ej: 100';
+  }
+}
+
+async function guardarPromo() {
+  const servicioId = document.getElementById('promo-servicio-select').value;
+  const titulo     = document.getElementById('promo-titulo').value.trim();
+  const desc       = document.getElementById('promo-desc').value.trim();
+  const valor      = parseFloat(document.getElementById('promo-valor')?.value) || null;
+  const fechaFin   = document.getElementById('promo-fecha-fin').value || null;
+  const limite     = parseInt(document.getElementById('promo-limite').value) || null;
+
+  if (!servicioId) { showToast('⚠️ Selecciona un servicio'); return; }
+  if (!titulo)     { showToast('⚠️ Escribe un título para la promo'); return; }
+  if ((_promoTipo === 'porcentaje' || _promoTipo === 'monto_fijo') && !valor) {
+    showToast('⚠️ Ingresa el valor del descuento'); return;
+  }
+
+  const btn = document.getElementById('btn-guardar-promo');
+  btn.textContent = '⏳ Guardando...'; btn.disabled = true;
+
+  try {
+    // Obtener precio del servicio para calcular precio_promo
+    const servData = await supaFetch('/rest/v1/servicios?id=eq.' + servicioId + '&select=precio,imagen_url').catch(()=>[]);
+    const precioOrig = servData?.[0]?.precio ? Number(servData[0].precio) : null;
+    let precioPromo  = null;
+    if (precioOrig) {
+      if (_promoTipo === 'porcentaje')  precioPromo = precioOrig * (1 - valor/100);
+      if (_promoTipo === 'monto_fijo')  precioPromo = precioOrig - valor;
+      if (_promoTipo === '2x1')         precioPromo = precioOrig / 2;
+      if (_promoTipo === '3x2')         precioPromo = (precioOrig * 2) / 3;
+    }
+
+    await supaFetch('/rest/v1/promos_descuentos', {
+      method: 'POST',
+      body: JSON.stringify({
+        servicio_id: parseInt(servicioId),
+        usuario_id:  currentUser.id,
+        titulo, descripcion: desc,
+        descuento_tipo: _promoTipo,
+        descuento_valor: valor,
+        precio_original: precioOrig,
+        precio_promo: precioPromo ? Math.round(precioPromo*100)/100 : null,
+        imagen_url: servData?.[0]?.imagen_url || null,
+        solo_entre_semana: true,
+        dias_activos: [1,2,3,4,5],
+        fecha_inicio: new Date().toISOString().split('T')[0],
+        fecha_fin: fechaFin,
+        limite_usos: limite,
+        activa: true
+      })
+    });
+
+    closeCrearPromo();
+    showToast('🎉 ¡Promo publicada! Se mostrará Lun–Vie');
+    cargarPromos();
+  } catch(e) {
+    showToast('❌ Error: ' + e.message);
+  } finally {
+    btn.textContent = '🚀 Publicar promo'; btn.disabled = false;
+  }
+}
+
+
+/* =====================================================
+   MAPA DE NEGOCIOS — SOBRE ACAPULCO
+   ===================================================== */
+
+let _mapaInstance   = null;
+let _mapaInicializado = false;
+
+// Colores y config por categoría
+const MAPA_CATS = {
+  experiencias: { color: '#1565C0', emoji: '⛵', label: 'Experiencias' },
+  gastronomia:  { color: '#2E7D32', emoji: '🍴', label: 'Gastronomía'  },
+  servicios:    { color: '#E65100', emoji: '💼', label: 'Servicios'     },
+  hospedaje:    { color: '#6A1B9A', emoji: '🏨', label: 'Hospedaje'     },
+};
+
+function crearIconoMapa(categoria, count) {
+  const cfg   = MAPA_CATS[categoria] || { color:'#607D8B', emoji:'📍' };
+  const size  = count > 1 ? 36 : 30;
+  const html  = count > 1
+    ? `<div style="
+        width:${size}px;height:${size}px;border-radius:50%;
+        background:${cfg.color};color:white;
+        display:flex;align-items:center;justify-content:center;
+        font-size:${count>9?10:12}px;font-weight:800;
+        border:2.5px solid white;
+        box-shadow:0 2px 8px rgba(0,0,0,.35);
+        font-family:'DM Sans',sans-serif;">${count}</div>`
+    : `<div style="
+        width:${size}px;height:${size}px;border-radius:50% 50% 50% 0;
+        transform:rotate(-45deg);
+        background:${cfg.color};
+        border:2.5px solid white;
+        box-shadow:0 2px 8px rgba(0,0,0,.35);
+        display:flex;align-items:center;justify-content:center;">
+        <span style="transform:rotate(45deg);font-size:13px;">${cfg.emoji}</span>
+       </div>`;
+
+  return L.divIcon({
+    html,
+    className: '',
+    iconSize: [size, size],
+    iconAnchor: [size/2, size],
+    popupAnchor: [0, -size]
+  });
+}
+
+async function initMapaNegocios() {
+  const el = document.getElementById('mapa-acapulco');
+  if (!el) return;
+
+  // Si ya existe el mapa, solo refrescar datos
+  if (_mapaInicializado && _mapaInstance) {
+    await cargarPuntosEnMapa();
+    return;
+  }
+
+  // Inicializar Leaflet
+  _mapaInstance = L.map('mapa-acapulco', {
+    center: [16.853, -99.903],
+    zoom: 13,
+    zoomControl: true,
+    scrollWheelZoom: false,
+  });
+
+  // Tile layer OpenStreetMap (100% gratuito)
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    maxZoom: 19,
+  }).addTo(_mapaInstance);
+
+  // Capa de marcadores con clustering manual
+  _mapaInstance.markersLayer = L.layerGroup().addTo(_mapaInstance);
+
+  _mapaInicializado = true;
+  await cargarPuntosEnMapa();
+  // Forzar repaint del mapa (necesario cuando el div no tenía tamaño al init)
+  setTimeout(() => { _mapaInstance.invalidateSize(); }, 100);
+}
+
+async function cargarPuntosEnMapa() {
+  if (!_mapaInstance) return;
+
+  try {
+    // Cargar servicios activos con coordenadas
+    const servicios = await supaFetch(
+      '/rest/v1/servicios?estado=eq.activo&select=id,titulo,categoria,ubicacion,precio,precio_tipo,lat,lng,imagen_url&order=categoria.asc'
+    );
+
+    if (!servicios || servicios.length === 0) {
+      mostrarMapaVacio();
+      return;
+    }
+
+    // Limpiar marcadores anteriores
+    _mapaInstance.markersLayer.clearLayers();
+
+    // Agrupar servicios sin coords por zona usando tabla zonas_acapulco
+    const sinCoords = servicios.filter(s => !s.lat || !s.lng);
+    let zonasMap = {};
+    if (sinCoords.length > 0) {
+      const zonas = await supaFetch('/rest/v1/zonas_acapulco?select=nombre,lat,lng').catch(()=>[]);
+      (zonas||[]).forEach(z => { zonasMap[z.nombre] = z; });
+    }
+
+    // Estadísticas
+    const stats = { total:0, experiencias:0, gastronomia:0, servicios:0, hospedaje:0 };
+    // Agrupar por posición cercana para no apilar marcadores
+    const posGroups = {};
+
+    servicios.forEach(s => {
+      let lat = s.lat, lng = s.lng;
+
+      // Si no tiene coords, tomar de zona + pequeño offset aleatorio
+      if (!lat && zonasMap[s.ubicacion]) {
+        const z = zonasMap[s.ubicacion];
+        lat = z.lat + (Math.random()-0.5)*0.003;
+        lng = z.lng + (Math.random()-0.5)*0.003;
+      }
+      if (!lat) return; // sin ubicación, omitir
+
+      const cat = s.categoria || 'servicios';
+      const key = `${Math.round(lat*1000)}_${Math.round(lng*1000)}_${cat}`;
+      if (!posGroups[key]) posGroups[key] = { lat, lng, cat, items:[] };
+      posGroups[key].items.push(s);
+
+      stats.total++;
+      if (stats[cat] !== undefined) stats[cat]++;
+    });
+
+    // Crear marcadores
+    Object.values(posGroups).forEach(group => {
+      const { lat, lng, cat, items } = group;
+      const cfg = MAPA_CATS[cat] || { color:'#607D8B', emoji:'📍', label: cat };
+      const icono = crearIconoMapa(cat, items.length);
+
+      // Popup con info del/los servicio(s)
+      const popupContent = items.length === 1
+        ? crearPopupSingle(items[0], cfg)
+        : crearPopupCluster(items, cfg);
+
+      const marker = L.marker([lat, lng], { icon: icono })
+        .bindPopup(popupContent, { maxWidth: 260, className: 'mapa-popup' });
+
+      // Click: abrir servicio en marketplace
+      if (items.length === 1) {
+        marker.on('popupopen', () => {
+          // Botón ver servicio
+          const btn = document.getElementById('mapa-ver-' + items[0].id);
+          if (btn) btn.addEventListener('click', () => {
+            _mapaInstance.closePopup();
+            showPage('marketplace');
+            setTimeout(() => {
+              const s = allServices?.find(x => x.id === items[0].id);
+              if (s) openDetail(s);
+            }, 400);
+          });
+        });
+      }
+
+      _mapaInstance.markersLayer.addLayer(marker);
+    });
+
+    // Actualizar estadísticas
+    document.getElementById('mapa-total').textContent = stats.total;
+    document.getElementById('mapa-exp').textContent   = stats.experiencias;
+    document.getElementById('mapa-gastro').textContent= stats.gastronomia;
+    document.getElementById('mapa-serv').textContent  = stats.servicios;
+    document.getElementById('mapa-hosp').textContent  = stats.hospedaje;
+
+  } catch(e) {
+    console.warn('Error cargando mapa:', e.message);
+    mostrarMapaVacio();
+  }
+}
+
+function crearPopupSingle(s, cfg) {
+  const precio = s.precio ? '$' + Number(s.precio).toLocaleString('es-MX') + ' / ' + (s.precio_tipo||'') : '';
+  const img    = s.imagen_url
+    ? `<img src="${s.imagen_url}" style="width:100%;height:100px;object-fit:cover;border-radius:8px;margin-bottom:8px;" onerror="this.style.display='none'"/>`
+    : '';
+  return `
+    <div style="font-family:'DM Sans',sans-serif;min-width:200px;">
+      ${img}
+      <div style="font-size:10px;font-weight:700;color:${cfg.color};text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px;">${cfg.emoji} ${cfg.label}</div>
+      <div style="font-size:14px;font-weight:700;color:#1a1a1a;line-height:1.3;margin-bottom:4px;">${s.titulo}</div>
+      <div style="font-size:11px;color:#888;margin-bottom:8px;">📍 ${s.ubicacion||'Acapulco'}</div>
+      ${precio ? `<div style="font-size:14px;font-weight:700;color:${cfg.color};">${precio}</div>` : ''}
+      <button id="mapa-ver-${s.id}"
+        style="margin-top:10px;width:100%;padding:8px;background:${cfg.color};color:white;border:none;
+               border-radius:8px;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;cursor:pointer;">
+        Ver servicio →
+      </button>
+    </div>`;
+}
+
+function crearPopupCluster(items, cfg) {
+  const lista = items.slice(0,4).map(s =>
+    `<div style="padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:12px;color:#333;">${cfg.emoji} ${s.titulo}</div>`
+  ).join('');
+  const extra = items.length > 4 ? `<div style="font-size:11px;color:#aaa;padding-top:4px;">+${items.length-4} más en esta zona</div>` : '';
+  return `
+    <div style="font-family:'DM Sans',sans-serif;min-width:200px;">
+      <div style="font-size:11px;font-weight:700;color:${cfg.color};margin-bottom:8px;">${cfg.emoji} ${items.length} ${cfg.label} aquí</div>
+      ${lista}${extra}
+      <button onclick="showPage('marketplace')" style="margin-top:8px;width:100%;padding:7px;background:${cfg.color};color:white;border:none;border-radius:8px;font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;cursor:pointer;">Ver en Marketplace</button>
+    </div>`;
+}
+
+function mostrarMapaVacio() {
+  ['mapa-total','mapa-exp','mapa-gastro','mapa-serv','mapa-hosp'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = '0';
+  });
+}
+
+// Al guardar coordenadas al publicar un servicio
+async function guardarCoordsServicio(servicioId, ubicacion) {
+  try {
+    const zona = await supaFetch('/rest/v1/zonas_acapulco?nombre=eq.' + encodeURIComponent(ubicacion) + '&select=lat,lng');
+    if (zona && zona.length > 0) {
+      const offsetLat = (Math.random()-0.5)*0.004;
+      const offsetLng = (Math.random()-0.5)*0.004;
+      supaFetch('/rest/v1/servicios?id=eq.' + servicioId, {
+        method: 'PATCH',
+        body: JSON.stringify({ lat: zona[0].lat + offsetLat, lng: zona[0].lng + offsetLng })
+      }).catch(()=>{});
+    }
+  } catch(e) {}
+}
+
+
+/* =====================================================
+   TICKET PDF — MIS COMPRAS
+   ===================================================== */
+
+function imprimirTicketPDF(folio) {
+  const compras = comprasGetAll();
+  const comp = compras.find(x => x.folio === folio);
+  if (!comp) { showToast('⚠️ No se encontró la compra'); return; }
+
+  const { jsPDF } = window.jspdf;
+  // Usar A4 estándar — siempre funciona en todas las versiones de jsPDF
+  const doc = new jsPDF({ orientation:'portrait', unit:'mm', format:'a4' });
+  const PW  = 210;  // ancho A4
+  const TW  = 90;   // ancho del ticket
+  const TX  = (PW - TW) / 2; // centrado
+  let y     = 20;
+
+  const DARK  = [10,31,31];
+  const TEAL  = [0,95,95];
+  const OTEAL = [0,128,128];
+  const WHITE = [255,255,255];
+  const GRAY  = [130,130,130];
+  const LGRAY = [240,240,240];
+  const GREEN = [46,125,50];
+
+  // ── Fondo del ticket ──────────────────────────────
+  doc.setFillColor(250,250,250);
+  doc.setDrawColor(220,220,220);
+  doc.roundedRect(TX - 2, y - 4, TW + 4, 230, 4, 4, 'FD');
+
+  // ── Encabezado ────────────────────────────────────
+  doc.setFillColor(...DARK);
+  doc.roundedRect(TX - 2, y - 4, TW + 4, 28, 4, 4, 'F');
+  // Círculo logo
+  doc.setFillColor(...TEAL);
+  doc.circle(TX + TW/2, y + 6, 7, 'F');
+  doc.setTextColor(...WHITE);
+  doc.setFontSize(8); doc.setFont('helvetica','bold');
+  doc.text('AC', TX + TW/2, y + 8.5, { align:'center' });
+  doc.setFontSize(13); doc.setFont('helvetica','bold');
+  doc.text('AcaConnect', TX + TW/2, y + 18, { align:'center' });
+  doc.setFontSize(7.5); doc.setFont('helvetica','normal');
+  doc.setTextColor(180,220,210);
+  doc.text('Comprobante de compra', TX + TW/2, y + 23, { align:'center' });
+  y += 30;
+
+  // ── Folio destacado ───────────────────────────────
+  doc.setFillColor(232,245,244);
+  doc.setDrawColor(...OTEAL);
+  doc.roundedRect(TX + 2, y, TW - 4, 14, 3, 3, 'FD');
+  doc.setTextColor(...GRAY); doc.setFontSize(6.5); doc.setFont('helvetica','normal');
+  doc.text('FOLIO DE COMPRA', TX + TW/2, y + 5, { align:'center' });
+  doc.setTextColor(...OTEAL); doc.setFontSize(11); doc.setFont('helvetica','bold');
+  doc.text(comp.folio, TX + TW/2, y + 11.5, { align:'center' });
+  y += 18;
+
+  // Helpers
+  const punteada = () => {
+    doc.setDrawColor(...LGRAY);
+    const dash = doc.setLineDashPattern || doc.setLineDash;
+    try { doc.setLineDashPattern([1.5,1.5], 0); } catch(e) {}
+    doc.line(TX + 2, y, TX + TW - 2, y);
+    try { doc.setLineDashPattern([], 0); } catch(e) {}
+    y += 5;
+  };
+  const fila = (label, valor, negrita, colorVal) => {
+    doc.setFont('helvetica','normal'); doc.setFontSize(7.5);
+    doc.setTextColor(...GRAY);
+    doc.text(label, TX + 4, y);
+    doc.setFont('helvetica', negrita ? 'bold' : 'normal');
+    doc.setTextColor(...(colorVal || [40,40,40]));
+    const valStr = String(valor);
+    const lines = doc.splitTextToSize(valStr, TW/2);
+    doc.text(lines[0], TX + TW - 4, y, { align:'right' });
+    y += 5.5;
+  };
+  const secTitle = (texto, colorFondo) => {
+    doc.setFillColor(...(colorFondo || DARK));
+    doc.roundedRect(TX + 2, y, 28, 5, 1, 1, 'F');
+    doc.setTextColor(...WHITE); doc.setFontSize(6.5); doc.setFont('helvetica','bold');
+    doc.text(texto, TX + 16, y + 3.5, { align:'center' });
+    y += 8;
+  };
+
+  punteada();
+
+  // ── Servicio ──────────────────────────────────────
+  secTitle('SERVICIO', TEAL);
+  doc.setFont('helvetica','bold'); doc.setFontSize(8.5); doc.setTextColor(20,20,20);
+  const tituloLines = doc.splitTextToSize(comp.servicio_titulo || '—', TW - 8);
+  tituloLines.forEach(l => { doc.text(l, TX + 4, y); y += 5; });
+  y += 1;
+  fila('Categoría', catLabel(comp.servicio_cat) || '—');
+  fila('Ubicación', comp.servicio_ubicacion || '—');
+  fila('Proveedor', comp.proveedor_nombre   || '—');
+
+  punteada();
+
+  // ── Pago ──────────────────────────────────────────
+  secTitle('DETALLE DEL PAGO', [230,81,0]);
+  const metLabels = { efectivo:'💵 Efectivo', tarjeta:'💳 Tarjeta', acapoints:'🪙 AcaPoints' };
+  fila('Método', metLabels[comp.metodo_pago] || comp.metodo_pago);
+  if (comp.metodo_pago === 'tarjeta' && comp.tarjeta_ultimos4)
+    fila('Tarjeta', '•••• •••• •••• ' + comp.tarjeta_ultimos4);
+  if (comp.metodo_pago === 'tarjeta' && comp.tarjeta_titular)
+    fila('Titular', comp.tarjeta_titular);
+  if (comp.acapoints_usados > 0)
+    fila('AcaPoints usados', comp.acapoints_usados + ' pts');
+  fila('Tipo de precio', comp.precio_tipo || '—');
+
+  y += 2;
+  // Total
+  doc.setFillColor(...DARK);
+  doc.roundedRect(TX + 2, y, TW - 4, 13, 2, 2, 'F');
+  doc.setTextColor(180,220,210); doc.setFontSize(7); doc.setFont('helvetica','normal');
+  doc.text('TOTAL PAGADO', TX + TW/2, y + 5, { align:'center' });
+  doc.setTextColor(...WHITE); doc.setFontSize(12); doc.setFont('helvetica','bold');
+  doc.text('$' + Number(comp.monto).toLocaleString('es-MX') + ' MXN', TX + TW/2, y + 11, { align:'center' });
+  y += 17;
+
+  punteada();
+
+  // ── Fecha ─────────────────────────────────────────
+  const fecha = new Date(comp.creado_en).toLocaleDateString('es-MX',{day:'2-digit',month:'long',year:'numeric'});
+  const hora  = new Date(comp.creado_en).toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+  fila('Fecha',  fecha);
+  fila('Hora',   hora);
+  fila('Estado', '✅ Completado', true, GREEN);
+
+  punteada();
+
+  // ── Verificado ────────────────────────────────────
+  doc.setFillColor(232,245,233);
+  doc.setDrawColor(...GREEN);
+  doc.roundedRect(TX + 2, y, TW - 4, 10, 2, 2, 'FD');
+  doc.setTextColor(...GREEN); doc.setFontSize(7.5); doc.setFont('helvetica','bold');
+  doc.text('✅  Compra verificada por AcaConnect', TX + TW/2, y + 6.5, { align:'center' });
+  y += 14;
+
+  // ── Pie ───────────────────────────────────────────
+  doc.setTextColor(...GRAY); doc.setFontSize(6.5); doc.setFont('helvetica','normal');
+  doc.text('hola@acaconnect.mx  ·  Acapulco de Juárez, Guerrero', TX + TW/2, y, { align:'center' }); y += 4;
+  doc.text('Guarda este ticket como comprobante de tu compra', TX + TW/2, y, { align:'center' });
+
+  doc.save('Ticket_' + comp.folio + '.pdf');
+  showToast('🎫 Ticket descargado: Ticket_' + comp.folio + '.pdf');
+}
 

@@ -8,6 +8,8 @@
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
 <link rel="stylesheet" href="styles.css"/>
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
@@ -31,6 +33,7 @@
     <li><a onclick="showPage(&quot;publish&quot;)">Publicar</a></li>
     <li><a onclick="showPage('about')">Sobre Acapulco</a></li>
     <li><a onclick="showPage('contact')">Contacto</a></li>
+    <li><a onclick="showPage('promos')" style="color:#E65100;font-weight:700;">🏷️ Promos</a></li>
     <li><a onclick="showPage('acapoints')" style="color:var(--teal);font-weight:600;">🪙 AcaPoints</a></li>
   </ul>
   <div class="nav-actions" id="nav-actions">
@@ -56,6 +59,7 @@
   <a onclick="showPage('about');closeMobileMenu()">🌊 Sobre Acapulco</a>
   <a onclick="showPage('contact');closeMobileMenu()">✉️ Contacto</a>
   <a onclick="showPage('acapoints');closeMobileMenu()" style="color:var(--teal);font-weight:600;">🪙 AcaPoints</a>
+  <a onclick="showPage('promos');closeMobileMenu()" style="color:#E65100;font-weight:700;">🏷️ Promos y Descuentos</a>
 </div>
 
 <!-- HOME -->
@@ -557,8 +561,24 @@
         <p class="hint" style="margin-top:8px;">🪙 <strong>AcaPoints</strong> es la moneda virtual de AcaConnect. 1 AcaPoint = $1 MXN.</p>
       </div>
 
+      <!-- TÉRMINOS Y CONDICIONES -->
+      <div class="form-group">
+        <div class="tyc-box" id="tyc-box">
+          <label class="tyc-label">
+            <input type="checkbox" id="pub-tyc" onchange="toggleTyC(this)"/>
+            <span class="tyc-check-custom"></span>
+            <span>Acepto los <button type="button" class="tyc-link" onclick="openTyC()">Términos y Condiciones</button> de AcaConnect para publicar servicios, incluyendo la política de comisiones y normas de la plataforma.</span>
+          </label>
+          <div class="tyc-promo-hint" id="tyc-promo-hint" style="display:none;">
+            🎉 <strong>¡Listo!</strong> Al aceptar los T&amp;C podrás crear <strong>Promos y Descuentos</strong> para tu servicio una vez publicado.
+          </div>
+        </div>
+      </div>
+
       <div class="form-actions">
-        <button class="btn-publish" onclick="publishService()">Publicar Servicio</button>
+        <button class="btn-publish" onclick="publishService()" id="btn-publicar" disabled style="opacity:.5;cursor:not-allowed;">
+          Publicar Servicio
+        </button>
         <button class="btn-cancel" onclick="showPage('marketplace')">Cancelar</button>
       </div>
     </div>
@@ -568,9 +588,43 @@
 
 <!-- SOBRE ACAPULCO -->
 <div id="page-about" class="page">
-  <h2>Sobre Acapulco</h2>
-  <p class="about-sub">Conoce la perla del Pacífico mexicano</p>
-  <div class="about-grid">
+  <div class="about-header">
+    <h2>Sobre Acapulco</h2>
+    <p class="about-sub">Conoce la perla del Pacífico mexicano</p>
+  </div>
+
+  <!-- MAPA DE NEGOCIOS — aparece primero -->
+  <div class="mapa-negocios-section">
+    <div class="mapa-header">
+      <div>
+        <h3 class="mapa-titulo">📍 Negocios en AcaConnect</h3>
+        <p class="mapa-sub">Servicios verificados activos en Acapulco</p>
+      </div>
+      <div class="mapa-leyenda">
+        <span class="mapa-leyenda-item"><span class="mapa-dot" style="background:#1565C0;"></span>Experiencias</span>
+        <span class="mapa-leyenda-item"><span class="mapa-dot" style="background:#2E7D32;"></span>Gastronomía</span>
+        <span class="mapa-leyenda-item"><span class="mapa-dot" style="background:#E65100;"></span>Servicios</span>
+        <span class="mapa-leyenda-item"><span class="mapa-dot" style="background:#6A1B9A;"></span>Hospedaje</span>
+      </div>
+    </div>
+    <div id="mapa-acapulco" class="mapa-container"></div>
+    <div class="mapa-stats">
+      <div class="mapa-stat"><span id="mapa-total">—</span><small>Negocios</small></div>
+      <div class="mapa-stat-div"></div>
+      <div class="mapa-stat"><span id="mapa-exp">—</span><small>⛵ Experiencias</small></div>
+      <div class="mapa-stat-div"></div>
+      <div class="mapa-stat"><span id="mapa-gastro">—</span><small>🍴 Gastronomía</small></div>
+      <div class="mapa-stat-div"></div>
+      <div class="mapa-stat"><span id="mapa-serv">—</span><small>💼 Servicios</small></div>
+      <div class="mapa-stat-div"></div>
+      <div class="mapa-stat"><span id="mapa-hosp">—</span><small>🏨 Hospedaje</small></div>
+    </div>
+  </div>
+
+  <!-- CARDS DE ACAPULCO — abajo del mapa, colapsables en móvil -->
+  <details class="about-cards-details" open>
+    <summary class="about-cards-summary">🌊 Conoce más sobre Acapulco</summary>
+    <div class="about-grid">
 
     <!-- 1. Playas -->
     <div class="about-card">
