@@ -311,14 +311,15 @@ function selectCat(btn) {
   document.querySelectorAll('.cat-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   selectedCat = btn.dataset.cat;
+  togglePrecioPanels();
+}
 
-  // Mostrar panel de precio según categoría
-  const esGastro  = selectedCat === 'gastronomia';
-  const estandar  = document.getElementById('precio-estandar-panel');
-  const rango     = document.getElementById('precio-rango-panel');
-  if (estandar) estandar.style.display = esGastro ? 'none' : 'block';
-  if (rango)    rango.style.display    = esGastro ? 'block' : 'none';
-  // Limpiar preview rango
+function togglePrecioPanels() {
+  const esGastro = selectedCat === 'gastronomia';
+  const estandar = document.getElementById('precio-estandar-panel');
+  const rango    = document.getElementById('precio-rango-panel');
+  if (estandar) { estandar.style.display = esGastro ? 'none'  : 'block'; }
+  if (rango)    { rango.style.display    = esGastro ? 'block' : 'none';  }
   const prev = document.getElementById('rango-preview');
   if (prev) prev.style.display = 'none';
 }
@@ -2470,7 +2471,6 @@ showPage = function(name) {
     if (!currentUser) { openModal('login'); showToast('⚠️ Inicia sesión para publicar'); return; }
     const rol = rolActual();
     if (rol === 'cliente') {
-      // Dejar que la página cargue y luego mostrar el panel de solicitud
       _origShowPage(name);
       pvMostrarPanelSolicitud();
       return;
@@ -2479,6 +2479,8 @@ showPage = function(name) {
     _origShowPage(name);
     document.getElementById('pv-solicitud-panel').style.display = 'none';
     document.getElementById('pv-form-publicar').style.display   = 'block';
+    // Sincronizar panel de precio con la categoría actual (con delay para GitHub Pages)
+    setTimeout(togglePrecioPanels, 50);
     return;
   }
   _origShowPage(name);
