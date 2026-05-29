@@ -474,64 +474,25 @@ svg.leaflet-zoom-animated{will-change:transform}
         </div>
       </div>
       <div class="form-group">
-        <label class="form-label">Ubicación <span class="req">*</span></label>
-        <select class="form-select" id="pub-location">
-          <option value="">Selecciona una zona</option>
-          <optgroup label="🏖 Zonas Turísticas">
-            <option>Zona Diamante</option>
-            <option>Zona Dorada</option>
-            <option>La Quebrada</option>
-            <option>Playa Condesa</option>
-            <option>Playa Icacos</option>
-            <option>Playa Hornos</option>
-            <option>Playa Hornitos</option>
-            <option>Playa Revolcadero</option>
-            <option>Playa Pie de la Cuesta</option>
-            <option>Playa Boca Chica</option>
-            <option>Puerto Marqués</option>
-            <option>Isla La Roqueta</option>
-          </optgroup>
-          <optgroup label="🏙 Zona Urbana">
-            <option>Centro de Acapulco</option>
-            <option>Acapulco Tradicional</option>
-            <option>Caleta y Caletilla</option>
-            <option>El Morro</option>
-            <option>Garita</option>
-            <option>Jardín de la Reina</option>
-            <option>Costa Azul</option>
-            <option>Icacos (Residencial)</option>
-          </optgroup>
-          <optgroup label="🛣 Colonias y Barrios">
-            <option>Ciudad Renacimiento</option>
-            <option>Colonia Moderna</option>
-            <option>El Coloso</option>
-            <option>Las Cruces</option>
-            <option>Lomas de Chapultepec</option>
-            <option>Mozimba</option>
-            <option>Progreso</option>
-            <option>Providencia</option>
-            <option>Santa Cruz</option>
-            <option>Tres Palos</option>
-            <option>El Arenal</option>
-            <option>La Sabana</option>
-          </optgroup>
-          <optgroup label="🌿 Municipios Cercanos">
-            <option>Coyuca de Benítez</option>
-            <option>San Marcos</option>
-            <option>Técpan de Galeana</option>
-          </optgroup>
-        </select>
+        <label class="form-label">Ubicación / Zona <span class="req">*</span></label>
+        <input class="form-input" type="text" id="pub-location"
+          placeholder="Ej: Zona Diamante, Centro, Playa Hornos..."
+          style="font-size:14px;"/>
+        <p class="hint">Escribe la zona o colonia donde está tu negocio. Se mostrará en tu tarjeta de servicio.</p>
       </div>
       <div class="form-group">
         <label class="form-label">
-          Enlace de Google Maps
+          🗺️ Enlace de Google Maps <span class="req">*</span>
+          <span style="font-weight:400;color:var(--text-light);font-size:12px;margin-left:4px;">(necesario para aparecer en el mapa)</span>
           <span style="font-weight:400;color:var(--text-light);font-size:12px;margin-left:6px;">(opcional)</span>
         </label>
         <input class="form-input" type="url" id="pub-maps-url"
           placeholder="https://maps.app.goo.gl/..."
-          style="font-size:13px;"/>
+          style="font-size:13px;"
+          oninput="previewMapsCoords(this.value)"/>
+        <div id="maps-coords-preview" style="display:none;margin-top:6px;"></div>
         <p style="font-size:12px;color:var(--text-light);margin-top:6px;line-height:1.5;">
-          📌 Abre Google Maps, busca tu negocio o dirección, toca <strong>Compartir → Copiar enlace</strong> y pégalo aquí.
+          📌 Abre Google Maps, busca tu negocio → toca <strong>Compartir → Copiar enlace</strong> y pégalo aquí. Las coordenadas exactas se usarán en el mapa.
         </p>
       </div>
       <div class="form-group">

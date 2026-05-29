@@ -327,6 +327,10 @@ async function publishService() {
   if (!titulo || !selectedCat || !precio || !ubicacion || !desc) {
     showToast('⚠️ Completa todos los campos requeridos'); return;
   }
+  if (!mapsUrl) {
+    showToast('⚠️ El enlace de Google Maps es obligatorio para aparecer en el mapa');
+    document.getElementById('pub-maps-url').focus(); return;
+  }
   if (!waFinal || waFinal.length !== 10) {
     showToast('⚠️ Agrega un número de WhatsApp de contacto (10 dígitos)');
     document.getElementById('pub-whatsapp').focus(); return;
@@ -381,7 +385,7 @@ async function publishService() {
     if (newId) {
       await guardarHorariosServicio(newId);
       await guardarDisponibilidadServicio(newId);
-      guardarCoordsServicio(newId, payload.ubicacion); // coords para el mapa
+      guardarCoordsServicio(newId, payload.ubicacion, payload.maps_url); // coords precisas del link o zona
     }
 
     setProgress(100);
@@ -6091,7 +6095,7 @@ async function cargarPuntosEnMapa() {
   try {
     // Cargar servicios activos con coordenadas
     const servicios = await supaFetch(
-      '/rest/v1/servicios?estado=eq.activo&select=id,titulo,categoria,ubicacion,precio,precio_tipo,lat,lng,imagen_url&order=categoria.asc'
+      '/rest/v1/servicios?estado=eq.activo&select=id,titulo,categoria,ubicacion,precio,precio_tipo,lat,lng,imagen_url,maps_url&order=categoria.asc'
     );
 
     if (!servicios || servicios.length === 0) {
@@ -6102,29 +6106,53 @@ async function cargarPuntosEnMapa() {
     // Limpiar marcadores anteriores
     _mapaInstance.markersLayer.clearLayers();
 
-    // Agrupar servicios sin coords por zona usando tabla zonas_acapulco
-    const sinCoords = servicios.filter(s => !s.lat || !s.lng);
-    let zonasMap = {};
-    if (sinCoords.length > 0) {
-      const zonas = await supaFetch('/rest/v1/zonas_acapulco?select=nombre,lat,lng').catch(()=>[]);
-      (zonas||[]).forEach(z => { zonasMap[z.nombre] = z; });
-    }
+    // Solo mostrar servicios con maps_url (coords precisas)
+    // Servicios sin link no aparecen en el mapa pero sí en el marketplace
 
     // Estadísticas
     const stats = { total:0, experiencias:0, gastronomia:0, servicios:0, hospedaje:0 };
     // Agrupar por posición cercana para no apilar marcadores
     const posGroups = {};
 
+    // Resolver coords del maps_url para TODOS los servicios que tienen link
+    // (prioridad: maps_url > lat/lng existente > zona)
+    const conURL = servicios.filter(s => s.maps_url);
+    const resolvedCoords = {};
+    if (conURL.length > 0) {
+      // Mostrar indicador de carga
+      const statsEl = document.getElementById('mapa-stats');
+      if (statsEl) statsEl.innerHTML += '<div style="grid-column:1/-1;text-align:center;font-size:12px;color:#888;padding:4px 0;">🔍 Resolviendo ubicaciones precisas...</div>';
+
+      await Promise.all(conURL.map(async s => {
+        const coords = await extraerCoordsDeURL(s.maps_url).catch(()=>null);
+        if (coords) {
+          resolvedCoords[s.id] = coords;
+          // Solo actualizar en DB si las coords son diferentes (mejora precisión)
+          if (!s.lat || !s.lng || Math.abs(s.lat - coords.lat) > 0.001) {
+            supaFetch('/rest/v1/servicios?id=eq.' + s.id, {
+              method: 'PATCH',
+              body: JSON.stringify({ lat: coords.lat, lng: coords.lng })
+            }).catch(()=>{});
+          }
+        }
+      }));
+      // Limpiar indicador
+      if (statsEl) {
+        const hint = statsEl.querySelector('div[style*="grid-column"]');
+        if (hint) hint.remove();
+      }
+    }
+
     servicios.forEach(s => {
       let lat = s.lat, lng = s.lng;
 
-      // Si no tiene coords, tomar de zona + pequeño offset aleatorio
-      if (!lat && zonasMap[s.ubicacion]) {
-        const z = zonasMap[s.ubicacion];
-        lat = z.lat + (Math.random()-0.5)*0.003;
-        lng = z.lng + (Math.random()-0.5)*0.003;
+      // Prioridad 1: coords del maps_url (más precisas que las de zona)
+      if (resolvedCoords[s.id]) {
+        lat = resolvedCoords[s.id].lat;
+        lng = resolvedCoords[s.id].lng;
       }
-      if (!lat) return; // sin ubicación, omitir
+
+      if (!lat) return; // Sin coords del maps_url → no mostrar en mapa
 
       const cat = s.categoria || 'servicios';
       const key = `${Math.round(lat*1000)}_${Math.round(lng*1000)}_${cat}`;
@@ -6221,19 +6249,75 @@ function mostrarMapaVacio() {
   });
 }
 
-// Al guardar coordenadas al publicar un servicio
-async function guardarCoordsServicio(servicioId, ubicacion) {
-  try {
-    const zona = await supaFetch('/rest/v1/zonas_acapulco?nombre=eq.' + encodeURIComponent(ubicacion) + '&select=lat,lng');
-    if (zona && zona.length > 0) {
-      const offsetLat = (Math.random()-0.5)*0.004;
-      const offsetLng = (Math.random()-0.5)*0.004;
-      supaFetch('/rest/v1/servicios?id=eq.' + servicioId, {
-        method: 'PATCH',
-        body: JSON.stringify({ lat: zona[0].lat + offsetLat, lng: zona[0].lng + offsetLng })
-      }).catch(()=>{});
+// ── Extraer coordenadas de URL de Google Maps ─────────────
+async function extraerCoordsDeURL(mapsUrl) {
+  if (!mapsUrl) return null;
+
+  // 1. Intentar extraer coords directamente de URLs expandidas
+  const patterns = [
+    /@(-?\d{1,3}\.\d{4,}),(-?\d{1,3}\.\d{4,})/,     // @lat,lng (Google Maps place)
+    /[?&]q=(-?\d{1,3}\.\d{4,}),(-?\d{1,3}\.\d{4,})/, // ?q=lat,lng
+    /[?&]ll=(-?\d{1,3}\.\d{4,}),(-?\d{1,3}\.\d{4,})/, // ?ll=lat,lng
+    /\/(-?\d{1,3}\.\d{6,}),(-?\d{1,3}\.\d{6,})/,      // /lat,lng en path
+  ];
+  for (const re of patterns) {
+    const m = mapsUrl.match(re);
+    if (m) {
+      const lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+      // Validar que estén en zona México (aprox)
+      if (lat > 14 && lat < 33 && lng > -120 && lng < -86) {
+        return { lat, lng, source: 'direct' };
+      }
     }
-  } catch(e) {}
+  }
+
+  // 2. Para links cortos (maps.app.goo.gl, goo.gl/maps): resolver con proxy
+  const isShort = /maps\.app\.goo\.gl|goo\.gl\/maps/i.test(mapsUrl);
+  if (isShort) {
+    try {
+      // allorigins.win es un proxy CORS gratuito que sigue redirects
+      const proxyUrl = 'https://api.allorigins.win/get?url=' + encodeURIComponent(mapsUrl);
+      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) });
+      if (res.ok) {
+        const data = await res.json();
+        const finalUrl = data.status?.url || '';
+        const contents = data.contents || '';
+
+        // Buscar coords en la URL final o en el contenido HTML
+        const searchIn = finalUrl + ' ' + contents.slice(0, 2000);
+        for (const re of patterns) {
+          const m = searchIn.match(re);
+          if (m) {
+            const lat = parseFloat(m[1]), lng = parseFloat(m[2]);
+            if (lat > 14 && lat < 33 && lng > -120 && lng < -86) {
+              return { lat, lng, source: 'proxy' };
+            }
+          }
+        }
+        // Buscar patrón alternativo en HTML (data-lat/data-lng o meta tags)
+        const metaMatch = contents.match(/"(-1[0-9]\.\d{6}),\s*(-9[0-9]\.\d{6})"/);
+        if (metaMatch) {
+          return { lat: parseFloat(metaMatch[1]), lng: parseFloat(metaMatch[2]), source: 'html' };
+        }
+      }
+    } catch(e) { console.warn('Proxy resolve failed:', e.message); }
+  }
+
+  return null; // No se pudo extraer
+}
+
+// Al guardar coordenadas al publicar un servicio
+async function guardarCoordsServicio(servicioId, ubicacion, mapsUrl) {
+  if (!mapsUrl) return; // Sin link → no guardar coords, no aparece en mapa
+  try {
+    const coords = await extraerCoordsDeURL(mapsUrl);
+    if (!coords) { console.warn('No se pudieron extraer coords de:', mapsUrl); return; }
+    supaFetch('/rest/v1/servicios?id=eq.' + servicioId, {
+      method: 'PATCH',
+      body: JSON.stringify({ lat: coords.lat, lng: coords.lng })
+    }).catch(()=>{});
+    console.log('Coords guardadas:', coords.lat, coords.lng);
+  } catch(e) { console.warn('guardarCoordsServicio error:', e.message); }
 }
 
 
@@ -6383,5 +6467,55 @@ function imprimirTicketPDF(folio) {
 
   doc.save('Ticket_' + comp.folio + '.pdf');
   showToast('🎫 Ticket descargado: Ticket_' + comp.folio + '.pdf');
+}
+
+
+/* =====================================================
+   PREVIEW DE COORDENADAS EN FORMULARIO DE PUBLICACIÓN
+   ===================================================== */
+
+let _mapsPreviewTimer = null;
+
+async function previewMapsCoords(url) {
+  const preview = document.getElementById('maps-coords-preview');
+  if (!preview) return;
+
+  if (!url || url.length < 10) { preview.style.display = 'none'; return; }
+
+  // Debounce: esperar 800ms antes de resolver
+  clearTimeout(_mapsPreviewTimer);
+  preview.style.display = 'block';
+  preview.innerHTML = `<span style="font-size:12px;color:#888;">🔍 Verificando coordenadas...</span>`;
+
+  _mapsPreviewTimer = setTimeout(async () => {
+    try {
+      const coords = await extraerCoordsDeURL(url);
+      if (coords) {
+        preview.innerHTML = `
+          <div style="display:flex;align-items:center;gap:8px;background:#f0faf8;border:1.5px solid #b2dfdb;
+                      border-radius:10px;padding:8px 12px;font-size:12px;">
+            <span style="font-size:16px;">📍</span>
+            <div>
+              <strong style="color:#007a7a;">✅ Coordenadas detectadas</strong><br>
+              <span style="color:#555;font-family:monospace;">Lat: ${coords.lat.toFixed(6)}  ·  Lng: ${coords.lng.toFixed(6)}</span>
+              <span style="color:#888;font-size:11px;margin-left:6px;">(${coords.source === 'proxy' ? 'link corto resuelto' : 'directo'})</span>
+            </div>
+          </div>`;
+      } else {
+        // Coords no extraíbles directamente — se usará zona como fallback
+        preview.innerHTML = `
+          <div style="display:flex;align-items:center;gap:8px;background:#fff8e1;border:1.5px solid #ffe082;
+                      border-radius:10px;padding:8px 12px;font-size:12px;">
+            <span style="font-size:16px;">🗺️</span>
+            <div>
+              <strong style="color:#f57f17;">Link válido</strong> — se usará la zona seleccionada como referencia.<br>
+              <span style="color:#888;font-size:11px;">Para mayor precisión, copia el link expandido desde Google Maps (contiene @lat,lng).</span>
+            </div>
+          </div>`;
+      }
+    } catch(e) {
+      preview.style.display = 'none';
+    }
+  }, 800);
 }
 
