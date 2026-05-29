@@ -3648,84 +3648,7 @@ function closeMisCompras() {
   document.body.style.overflow = '';
 }
 
-function renderMisCompras(filtro) {
-  const container = document.getElementById('miscompras-list');
-  if (!container) return;
-  let compras = comprasGetAll();
 
-  // Filtro de búsqueda
-  if (filtro) {
-    const q = filtro.toLowerCase();
-    compras = compras.filter(c =>
-      c.folio.toLowerCase().includes(q) ||
-      c.servicio_titulo.toLowerCase().includes(q) ||
-      c.metodo_pago.toLowerCase().includes(q)
-    );
-  }
-
-  // Stats
-  const total = comprasGetAll().length;
-  const gastado = comprasGetAll().reduce((s, c) => s + Number(c.monto), 0);
-  document.getElementById('mc-stat-total').textContent = total;
-  document.getElementById('mc-stat-monto').textContent = '$' + gastado.toLocaleString('es-MX') + ' MXN';
-
-  if (compras.length === 0) {
-    container.innerHTML = `
-      <div style="text-align:center;padding:48px 20px;">
-        <div style="font-size:48px;margin-bottom:12px;">🛍️</div>
-        <h3 style="color:var(--text);margin:0 0 8px;">Aún no tienes compras</h3>
-        <p style="color:#888;font-size:14px;">Explora el marketplace y contrata tu primer servicio.</p>
-        <button onclick="closeMisCompras();showPage('marketplace')" 
-          style="margin-top:16px;background:var(--teal);color:#fff;border:none;padding:12px 28px;border-radius:100px;font-family:'DM Sans',sans-serif;font-size:14px;font-weight:600;cursor:pointer;">
-          Ir al Marketplace →
-        </button>
-      </div>`;
-    return;
-  }
-
-  const metIcono = { efectivo:'💵', tarjeta:'💳', acapoints:'🪙' };
-  const metLabel = { efectivo:'Efectivo', tarjeta:'Tarjeta', acapoints:'AcaPoints' };
-  const catColor = { gastronomia:'#e8f5e9', hospedaje:'#e3f2fd', servicios:'#fff3e0', experiencias:'#f3e5f5' };
-  const catIcon  = { gastronomia:'🍴', hospedaje:'🏨', servicios:'💼', experiencias:'⛵' };
-
-  container.innerHTML = compras.map(c => {
-    const fecha = new Date(c.creado_en).toLocaleDateString('es-MX', {
-      day:'2-digit', month:'long', year:'numeric', hour:'2-digit', minute:'2-digit'
-    });
-    const precioFmt = '$' + Number(c.monto).toLocaleString('es-MX');
-    const cardInfo = c.metodo_pago === 'tarjeta' && c.tarjeta_ultimos4
-      ? `<span style="font-size:11px;color:#888;"> •••• ${c.tarjeta_ultimos4}</span>` : '';
-    const apInfo = c.metodo_pago === 'acapoints'
-      ? `<span style="font-size:11px;color:#888;"> ${c.acapoints_usados} pts</span>` : '';
-    const imgSrc = c.servicio_imagen || 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=200&q=60';
-
-    return `
-    <div class="mc-card" onclick="openCompraDetalle('${c.folio}')">
-      <div class="mc-card-img-wrap">
-        <img src="${imgSrc}" alt="${c.servicio_titulo}" onerror="this.src='https://images.unsplash.com/photo-1507525428034-b723cf961d3e?w=200&q=60'"/>
-        <span class="mc-cat-badge" style="background:${catColor[c.servicio_cat]||'#f0f0f0'}">
-          ${catIcon[c.servicio_cat]||'🔖'} ${catLabel(c.servicio_cat)}
-        </span>
-      </div>
-      <div class="mc-card-body">
-        <div class="mc-folio">Folio: <strong>${c.folio}</strong></div>
-        <h4 class="mc-titulo">${c.servicio_titulo}</h4>
-        <div class="mc-meta">
-          <span>📍 ${c.servicio_ubicacion || '—'}</span>
-          <span>👤 ${c.proveedor_nombre}</span>
-        </div>
-        <div class="mc-footer">
-          <div class="mc-precio">${precioFmt} <span style="font-size:12px;font-weight:400;color:#888">/ ${c.precio_tipo||''}</span></div>
-          <div class="mc-metodo">${metIcono[c.metodo_pago]||'💰'} ${metLabel[c.metodo_pago]||c.metodo_pago}${cardInfo}${apInfo}</div>
-        </div>
-        <div class="mc-fecha">${fecha}</div>
-      </div>
-      <div class="mc-arrow">›</div>
-    </div>`;
-  }).join('');
-}
-
-// ── Abrir detalle de una compra ─────────────────────────
 function openCompraDetalle(folio) {
   const compras = comprasGetAll();
   const c = compras.find(x => x.folio === folio);
@@ -3846,6 +3769,127 @@ const ACA_PACKAGES = [
 ];
 // Tasa retiro AcaPoints: usuario recibe $0.80 por punto → plataforma gana $0.20 extra por cada punto retirado
 const MARGEN_RETIRO_ACA = 0.20; // $0.20 por AcaPoint retirado
+
+async function renderAdminRoles() {
+  const list = document.getElementById('admin-list');
+  list.innerHTML = `<div style="text-align:center;padding:30px;color:#aaa;">⏳ Cargando roles...</div>`;
+
+  try {
+    const [roles, usuarios] = await Promise.all([
+      supaFetch('/rest/v1/roles?order=nivel.desc&select=*').catch(()=>[]),
+      supaFetch('/rest/v1/usuarios?select=id,nombre,email,rol,tipo&order=nombre.asc'),
+    ]);
+
+    const historial = await supaFetch('/rest/v1/historial_roles?order=cambiado_en.desc&limit=10&select=*').catch(()=>[]);
+
+    const countByRol = {};
+    (usuarios||[]).forEach(u => {
+      const r = u.rol || u.tipo || 'cliente';
+      countByRol[r] = (countByRol[r]||0) + 1;
+    });
+
+    const COLORS = { admin:'#E53935', supervisor:'#F57C00', vendedor:'#1976D2', cliente:'#388E3C' };
+    const BG     = { admin:'#FFEBEE', supervisor:'#FFF3E0', vendedor:'#E3F2FD', cliente:'#E8F5E9' };
+    const ICONS  = { admin:'👑', supervisor:'🔍', vendedor:'🏪', cliente:'👤' };
+
+    list.innerHTML = `
+    <div style="padding:4px 0;">
+
+      <!-- Botón exportar PDF -->
+      <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
+        <button onclick="exportarUsuariosPDF()"
+          style="background:#1565C0;color:#fff;border:none;border-radius:20px;padding:8px 16px;
+                 font-family:'DM Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer;
+                 display:flex;align-items:center;gap:6px;">
+          📄 Exportar usuarios PDF
+        </button>
+      </div>
+
+      <!-- Tarjetas de roles -->
+      <div style="font-size:12px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;">Roles del sistema</div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:20px;">
+        ${(roles&&roles.length?roles:[
+          {slug:'admin',nombre:'Administrador',descripcion:'Acceso total',icono:'👑',nivel:4},
+          {slug:'supervisor',nombre:'Supervisor',descripcion:'Modera contenido',icono:'🔍',nivel:3},
+          {slug:'vendedor',nombre:'Vendedor',descripcion:'Publica servicios',icono:'🏪',nivel:2},
+          {slug:'cliente',nombre:'Cliente',descripcion:'Contrata servicios',icono:'👤',nivel:1},
+        ]).map(r => `
+        <div style="background:${BG[r.slug]||'#f5f5f5'};border:1.5px solid ${COLORS[r.slug]||'#ccc'};
+                    border-radius:14px;padding:14px 16px;">
+          <div style="font-size:24px;margin-bottom:4px;">${r.icono}</div>
+          <div style="font-size:15px;font-weight:800;color:${COLORS[r.slug]||'#333'};">${r.nombre}</div>
+          <div style="font-size:11px;color:#888;margin:4px 0 8px;">${r.descripcion||''}</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;">
+            <span style="background:${COLORS[r.slug]||'#888'};color:white;font-size:12px;font-weight:700;
+                         padding:3px 10px;border-radius:20px;">${countByRol[r.slug]||0} usuarios</span>
+            <span style="font-size:11px;color:#aaa;">Nivel ${r.nivel}</span>
+          </div>
+        </div>`).join('')}
+      </div>
+
+      <!-- Lista de usuarios con rol -->
+      <div style="font-size:12px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;">Usuarios y sus roles</div>
+      <div style="background:#fff;border:1.5px solid #e8e8e8;border-radius:14px;overflow:hidden;margin-bottom:20px;">
+        ${(usuarios||[]).map(u => {
+          const r   = u.rol || u.tipo || 'cliente';
+          const esYo = currentUser && u.id === currentUser.id;
+          return `
+          <div style="display:flex;align-items:center;gap:12px;padding:11px 16px;border-bottom:1px solid #f5f5f5;">
+            <div style="width:34px;height:34px;border-radius:50%;background:${BG[r]||'#f5f5f5'};
+                        display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">
+              ${ICONS[r]||'👤'}
+            </div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:13px;font-weight:700;color:#1a1a1a;">
+                ${u.nombre}
+                ${esYo?'<span style="font-size:10px;background:#eee;padding:1px 6px;border-radius:10px;color:#888;margin-left:4px;">Tú</span>':''}
+              </div>
+              <div style="font-size:11px;color:#aaa;">${u.email}</div>
+            </div>
+            ${esYo
+              ? `<span style="font-size:11px;color:#aaa;padding:5px 10px;">—</span>`
+              : `<select onchange="cambiarRol('${u.id}',this.value,'${r}')"
+                  style="border:1.5px solid ${COLORS[r]||'#ccc'};background:${BG[r]||'#f5f5f5'};
+                         color:${COLORS[r]||'#333'};font-family:'DM Sans',sans-serif;font-size:12px;
+                         font-weight:700;padding:5px 10px;border-radius:20px;cursor:pointer;outline:none;">
+                  <option value="admin"      ${r==='admin'      ?'selected':''}>👑 Admin</option>
+                  <option value="supervisor" ${r==='supervisor' ?'selected':''}>🔍 Supervisor</option>
+                  <option value="vendedor"   ${r==='vendedor'   ?'selected':''}>🏪 Vendedor</option>
+                  <option value="cliente"    ${r==='cliente'    ?'selected':''}>👤 Cliente</option>
+                </select>`
+            }
+          </div>`;
+        }).join('')}
+      </div>
+
+      <!-- Historial reciente -->
+      <div style="font-size:12px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;">Cambios recientes de rol</div>
+      <div style="background:#fff;border:1.5px solid #e8e8e8;border-radius:14px;overflow:hidden;">
+        ${!(historial&&historial.length)
+          ? `<p style="text-align:center;color:#aaa;padding:20px;font-size:13px;">Sin cambios registrados aún</p>`
+          : historial.map(h => {
+              const fecha = new Date(h.cambiado_en).toLocaleDateString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+              return `
+              <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid #f5f5f5;font-size:12px;">
+                <span style="font-size:16px;">🔄</span>
+                <div style="flex:1;">
+                  <strong>Usuario #${h.usuario_id}</strong>
+                  <span style="color:#aaa;"> · ${h.rol_anterior||'—'} → </span>
+                  <span style="color:${COLORS[h.rol_nuevo]||'#333'};font-weight:700;">${h.rol_nuevo}</span>
+                </div>
+                <span style="color:#bbb;white-space:nowrap;">${fecha}</span>
+              </div>`;
+            }).join('')
+        }
+      </div>
+
+    </div>`;
+
+  } catch(e) {
+    list.innerHTML = `<p style="color:red;padding:20px;font-size:13px;">Error al cargar roles: ${e.message}</p>`;
+  }
+}
+
 
 async function renderAdminGanancias() {
   const list = document.getElementById('admin-list');
