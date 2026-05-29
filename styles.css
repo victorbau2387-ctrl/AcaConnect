@@ -571,7 +571,9 @@
   .cat-btn{border:1.5px solid var(--border);border-radius:12px;padding:20px 8px;background:#fff;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:10px;font-family:'DM Sans',sans-serif;font-size:13px;color:var(--text-mid);font-weight:500;transition:all .18s;}
   .cat-btn .cat-icon{font-size:24px;}
   .cat-btn:hover,.cat-btn.active{border-color:var(--teal);color:var(--teal-dark);background:#EFF6F5;}
-  .row-2{display:grid;grid-template-columns:1fr 1fr;gap:24px;align-items:start;}
+  .row-2{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start;box-sizing:border-box;width:100%;}
+  .row-2 .form-group{min-width:0;box-sizing:border-box;}
+  .row-2 .form-input,.row-2 .form-select{box-sizing:border-box;width:100%;}
   .char-count{text-align:right;font-size:12px;color:var(--text-light);margin-top:6px;}
   .hint{font-size:12px;color:var(--text-light);margin-top:6px;}
   .form-actions{display:flex;gap:16px;margin-top:8px;}
@@ -581,7 +583,7 @@
   .btn-cancel:hover{border-color:var(--text-mid);}
   .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:200;align-items:center;justify-content:center;backdrop-filter:blur(4px);}
   .modal-overlay.open{display:flex;}
-  .modal{background:#fff;border-radius:24px;width:420px;max-width:95vw;padding:40px 36px;animation:modalPop .25s ease both;position:relative;}
+  .modal{background:#fff;border-radius:24px;width:420px;max-width:95vw;padding:40px 36px;animation:modalPop .25s ease both;position:relative;box-sizing:border-box;overflow:hidden;}
   @keyframes modalPop{from{opacity:0;transform:scale(.94);}to{opacity:1;transform:scale(1);}}
   .modal-logo{font-family:'Playfair Display',serif;font-size:22px;font-weight:900;margin-bottom:6px;text-align:center;}
   .modal-logo span:first-child{color:var(--text-dark);}
@@ -904,7 +906,9 @@
   .foto-preview-item .btn-rm:hover{background:#E53935;}
 
   .pass-wrapper{position:relative;}
-  .pass-wrapper .form-input{padding-right:44px;}
+  .pass-wrapper .form-input{padding-right:44px;box-sizing:border-box;width:100%;}
+  .pass-wrapper{position:relative;width:100%;box-sizing:border-box;}
+  .pass-wrapper .toggle-pass{position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;color:var(--text-light);z-index:1;}
   .btn-eye{position:absolute;right:14px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:var(--text-light);font-size:18px;line-height:1;padding:0;transition:color .2s;}
   .btn-eye:hover{color:var(--teal);}
   .upload-progress{height:4px;background:var(--border);border-radius:2px;margin-top:10px;overflow:hidden;display:none;}
@@ -3123,3 +3127,17 @@
   transform: rotate(180deg);
 }
 
+
+/* ── Auth modal fix: no overflow en móvil ── */
+@media (max-width: 480px) {
+  .modal { padding: 32px 20px; width: calc(100vw - 32px); }
+}
+.modal .form-group,
+.modal .form-input,
+.modal .pass-wrapper { box-sizing: border-box; width: 100%; max-width: 100%; }
+.modal .btn-modal-submit { box-sizing: border-box; width: 100%; }
+
+/* ── row-2 stack en móvil ── */
+@media (max-width: 560px) {
+  .row-2 { grid-template-columns: 1fr; gap: 0; }
+}
