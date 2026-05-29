@@ -363,7 +363,14 @@ async function publishService() {
     };
     if (mapsUrl) payload.maps_url = mapsUrl;
 
-    await supaFetch('/rest/v1/servicios', { method: 'POST', body: JSON.stringify(payload) });
+    const newServicio = await supaFetch('/rest/v1/servicios', { method: 'POST', body: JSON.stringify(payload) });
+    const newId = Array.isArray(newServicio) ? newServicio[0]?.id : newServicio?.id;
+
+    // Guardar horarios y disponibilidad si el servicio fue creado
+    if (newId) {
+      await guardarHorariosServicio(newId);
+      await guardarDisponibilidadServicio(newId);
+    }
 
     setProgress(100);
     showToast('✅ Servicio enviado. Un administrador lo revisará pronto.');
@@ -3840,60 +3847,73 @@ const ACA_PACKAGES = [
 // Tasa retiro AcaPoints: usuario recibe $0.80 por punto → plataforma gana $0.20 extra por cada punto retirado
 const MARGEN_RETIRO_ACA = 0.20; // $0.20 por AcaPoint retirado
 
-function renderAdminGanancias() {
+async function renderAdminGanancias() {
   const list = document.getElementById('admin-list');
+  list.innerHTML = `<div style="text-align:center;padding:30px;color:#aaa;">⏳ Cargando ganancias...</div>`;
 
-  // Recopilar datos de todos los usuarios desde localStorage global
-  // (en producción real vendría de Supabase)
-  let totalVentaAca = 0, totalGananciaAca = 0, totalTransacciones = 0;
-  let totalRetirosAca = 0, totalGananciaRetiros = 0;
-  let ventasPorPaquete = { 50:0, 100:0, 200:0, 500:0 };
-
-  // Escanear todos los keys de localStorage que sean transacciones de AcaPoints
   try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
-      if (key && key.startsWith('aca_tx_')) {
-        const txs = JSON.parse(localStorage.getItem(key) || '[]');
-        txs.forEach(tx => {
-          if (tx.tipo === 'compra' && tx.monto_mxn) {
-            const mxn = Number(tx.monto_mxn);
-            const pkg = ACA_PACKAGES.find(p => p.mxn === mxn);
-            if (pkg) {
-              totalVentaAca     += pkg.mxn;
-              totalGananciaAca  += pkg.ganancia;
-              totalTransacciones++;
-              ventasPorPaquete[pkg.mxn] = (ventasPorPaquete[pkg.mxn] || 0) + 1;
-            }
-          }
-          if (tx.tipo === 'reembolso' && tx.puntos) {
-            const pts = Number(tx.puntos);
-            totalRetirosAca       += pts;
-            totalGananciaRetiros  += pts * MARGEN_RETIRO_ACA;
-          }
-        });
+    // ── Leer TODAS las transacciones desde Supabase ───────
+    const [txs, retiros, pagos] = await Promise.all([
+      supaFetch('/rest/v1/transacciones_acapoints?order=creado_en.desc&select=*'),
+      supaFetch('/rest/v1/transacciones_acapoints?tipo=eq.reembolso&select=puntos,creado_en').catch(()=>[]),
+      supaFetch('/rest/v1/pagos?select=id,metodo_pago,monto,creado_en&order=creado_en.desc').catch(()=>[]),
+    ]);
+
+    // ── Calcular ganancias ────────────────────────────────
+    let totalVentaAca = 0, totalGananciaAca = 0, totalTransacciones = 0;
+    let totalRetirosAca = 0, totalGananciaRetiros = 0;
+    const ventasPorPaquete = { 50:0, 100:0, 200:0, 500:0 };
+
+    (txs||[]).forEach(tx => {
+      if (tx.tipo === 'compra' && tx.monto_mxn) {
+        const mxn = Number(tx.monto_mxn);
+        const pkg = ACA_PACKAGES.find(p => p.mxn === mxn);
+        if (pkg) {
+          totalVentaAca    += pkg.mxn;
+          totalGananciaAca += pkg.ganancia;
+          totalTransacciones++;
+          ventasPorPaquete[pkg.mxn] = (ventasPorPaquete[pkg.mxn]||0) + 1;
+        }
       }
-      // También leer billetera para retiros
-      if (key && key.startsWith('aca_billetera_')) {
-        const movs = JSON.parse(localStorage.getItem(key) || '[]');
-        movs.forEach(m => {
-          if (m.tipo === 'retiro_aca' && m.puntos) {
-            // ya contado arriba desde tx, evitar doble conteo
-          }
-        });
+      if (tx.tipo === 'reembolso' && tx.puntos) {
+        totalRetirosAca      += Number(tx.puntos);
+        totalGananciaRetiros += Number(tx.puntos) * MARGEN_RETIRO_ACA;
       }
+    });
+
+    // Ingresos por pagos con tarjeta (5% comisión implícita de la plataforma)
+    const COMISION_TARJETA = 0.05;
+    const totalPagosTarjeta = (pagos||[]).filter(p=>p.metodo_pago==='tarjeta').reduce((s,p)=>s+Number(p.monto||0),0);
+    const gananciaTarjeta   = totalPagosTarjeta * COMISION_TARJETA;
+
+    const totalGananciaBruta = totalGananciaAca + totalGananciaRetiros + gananciaTarjeta;
+    const margenPromedio = totalVentaAca > 0
+      ? ((totalGananciaAca / totalVentaAca) * 100).toFixed(1) : '15.0';
+
+    // ── Ingresos por mes (últimos 6) ─────────────────────
+    function porMes(arr, campoMonto) {
+      const now = new Date();
+      const meses = {};
+      for (let i=5; i>=0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
+        meses[d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'})] = 0;
+      }
+      (arr||[]).forEach(item => {
+        const d = new Date(item.creado_en);
+        const k = d.toLocaleDateString('es-MX',{month:'short',year:'2-digit'});
+        if (meses[k] !== undefined) meses[k] += campoMonto ? Number(item[campoMonto]||0) : 1;
+      });
+      return meses;
     }
-  } catch(e) {}
+    const txCompras   = (txs||[]).filter(t=>t.tipo==='compra');
+    const comprasMes  = porMes(txCompras, 'monto_mxn');
+    const retirosMes  = porMes((txs||[]).filter(t=>t.tipo==='reembolso'));
+    const meses       = Object.keys(comprasMes);
 
-  const totalGananciaBruta = totalGananciaAca + totalGananciaRetiros;
-  const margenPromedio = totalVentaAca > 0
-    ? ((totalGananciaAca / totalVentaAca) * 100).toFixed(1) : '15.0';
+    const maxVentas = Math.max(...Object.values(ventasPorPaquete), 1);
+    const barColors = { 50:'#42a5f5', 100:'#26c6da', 200:'#66bb6a', 500:'#ab47bc' };
 
-  // Chart data para paquetes
-  const maxVentas = Math.max(...Object.values(ventasPorPaquete), 1);
-  const barColors = { 50:'#42a5f5', 100:'#26c6da', 200:'#66bb6a', 500:'#ab47bc' };
-
-  list.innerHTML = `
+    list.innerHTML = `
     <div class="ag-wrapper">
 
       <!-- Botón exportar PDF -->
@@ -3910,7 +3930,7 @@ function renderAdminGanancias() {
       <div class="ag-kpis">
         <div class="ag-kpi verde">
           <div class="ag-kpi-icon">💰</div>
-          <div class="ag-kpi-val">$${totalGananciaBruta.toLocaleString('es-MX', {minimumFractionDigits:2})} MXN</div>
+          <div class="ag-kpi-val">$${totalGananciaBruta.toLocaleString('es-MX',{minimumFractionDigits:2})} MXN</div>
           <div class="ag-kpi-label">Ganancia bruta total</div>
         </div>
         <div class="ag-kpi azul">
@@ -3927,6 +3947,14 @@ function renderAdminGanancias() {
           <div class="ag-kpi-icon">🔄</div>
           <div class="ag-kpi-val">${totalTransacciones}</div>
           <div class="ag-kpi-label">Transacciones</div>
+        </div>
+      </div>
+
+      <!-- Gráfica ingresos por mes -->
+      <div class="ag-section">
+        <div class="ag-section-title">📈 Ingresos por mes (últimos 6 meses)</div>
+        <div style="background:#fff;border:1.5px solid #e8e8e8;border-radius:12px;padding:16px;">
+          <canvas id="ag-chart-meses" height="160"></canvas>
         </div>
       </div>
 
@@ -3947,15 +3975,20 @@ function renderAdminGanancias() {
           </div>`).join('')}
           <div class="ag-table-row">
             <span>🏦 Retiros AcaPoints (${totalRetirosAca.toFixed(0)} pts)</span>
-            <span>—</span>
-            <span>—</span>
+            <span>—</span><span>—</span>
             <span class="ag-green">+$${totalGananciaRetiros.toLocaleString('es-MX',{minimumFractionDigits:2})}</span>
             <span><span class="ag-badge-green">20%</span></span>
           </div>
+          <div class="ag-table-row">
+            <span>💳 Comisión tarjeta (${(COMISION_TARJETA*100).toFixed(0)}% de $${totalPagosTarjeta.toLocaleString('es-MX')})</span>
+            <span>$${totalPagosTarjeta.toLocaleString('es-MX')}</span><span>—</span>
+            <span class="ag-green">+$${gananciaTarjeta.toLocaleString('es-MX',{minimumFractionDigits:2})}</span>
+            <span><span class="ag-badge-green">${(COMISION_TARJETA*100).toFixed(0)}%</span></span>
+          </div>
           <div class="ag-table-row ag-total-row">
             <span><strong>TOTAL</strong></span>
-            <span><strong>$${totalVentaAca.toLocaleString('es-MX')} MXN</strong></span>
-            <span><strong>$${(totalVentaAca - totalGananciaAca).toLocaleString('es-MX')}</strong></span>
+            <span><strong>$${(totalVentaAca+totalPagosTarjeta).toLocaleString('es-MX')}</strong></span>
+            <span><strong>—</strong></span>
             <span><strong class="ag-green">+$${totalGananciaBruta.toLocaleString('es-MX',{minimumFractionDigits:2})}</strong></span>
             <span><strong>${margenPromedio}%</strong></span>
           </div>
@@ -3985,18 +4018,11 @@ function renderAdminGanancias() {
       <div class="ag-section">
         <div class="ag-section-title">⚙️ Política de precios AcaPoints</div>
         <div class="ag-policy">
-          <div class="ag-policy-row">
-            <span>💳 Valor para compras</span><strong>1 AcaPoint = $1.00 MXN</strong>
-          </div>
-          <div class="ag-policy-row">
-            <span>🏦 Tasa de retiro</span><strong>1 AcaPoint = $0.80 MXN</strong>
-          </div>
-          <div class="ag-policy-row">
-            <span>📈 Margen mínimo garantizado</span><strong class="ag-green">15%</strong>
-          </div>
-          <div class="ag-policy-row">
-            <span>💰 Ganancia en retiro por punto</span><strong class="ag-green">$0.20 MXN</strong>
-          </div>
+          <div class="ag-policy-row"><span>💳 Valor para compras</span><strong>1 AcaPoint = $1.00 MXN</strong></div>
+          <div class="ag-policy-row"><span>🏦 Tasa de retiro</span><strong>1 AcaPoint = $0.80 MXN</strong></div>
+          <div class="ag-policy-row"><span>📈 Margen mínimo garantizado</span><strong class="ag-green">15%</strong></div>
+          <div class="ag-policy-row"><span>💰 Ganancia en retiro por punto</span><strong class="ag-green">$0.20 MXN</strong></div>
+          <div class="ag-policy-row"><span>💳 Comisión por pago con tarjeta</span><strong class="ag-green">5%</strong></div>
         </div>
         <div class="ag-packages-preview">
           ${ACA_PACKAGES.map(p => `
@@ -4011,499 +4037,39 @@ function renderAdminGanancias() {
       </div>
 
     </div>`;
-}
 
-
-/* =====================================================
-   MIS VENTAS — ACACONNECT
-   ===================================================== */
-
-let _misVentasData = [];
-
-// ── Abrir panel Mis Ventas ──────────────────────────────
-async function openMisVentas() {
-  if (!currentUser) { openModal('login'); return; }
-  const ovl = document.getElementById('misventas-overlay');
-  ovl.style.display = 'flex';
-  document.body.style.overflow = 'hidden';
-  document.getElementById('mv-list').innerHTML = `
-    <div style="text-align:center;padding:40px 0;color:#aaa;">
-      <div style="font-size:32px;margin-bottom:8px;">⏳</div>
-      Cargando ventas...
-    </div>`;
-  await cargarMisVentas();
-}
-
-function closeMisVentas() {
-  document.getElementById('misventas-overlay').style.display = 'none';
-  document.body.style.overflow = '';
-}
-
-// ── Cargar ventas desde Supabase ────────────────────────
-async function cargarMisVentas(filtro) {
-  try {
-    const res = await fetch(
-      SUPA_URL + '/rest/v1/pagos?proveedor_id=eq.' + currentUser.id +
-      '&order=creado_en.desc&select=*',
-      { headers: { 'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY } }
-    );
-
-    if (!res.ok) { renderMisVentasVacio('Error al cargar. Intenta de nuevo.'); return; }
-    const data = await res.json();
-    _misVentasData = data || [];
-
-    // Actualizar badge del nav
-    const badge = document.getElementById('nav-ventas-badge');
-    if (badge) {
-      if (_misVentasData.length > 0) {
-        badge.style.display = 'inline-block';
-        badge.textContent   = _misVentasData.length;
-      } else {
-        badge.style.display = 'none';
-      }
-    }
-
-    renderMisVentas(filtro);
-  } catch(e) {
-    renderMisVentasVacio('Sin conexión. Intenta de nuevo.');
-  }
-}
-
-function renderMisVentasVacio(msg) {
-  document.getElementById('mv-list').innerHTML = `
-    <div style="text-align:center;padding:48px 20px;">
-      <div style="font-size:48px;margin-bottom:12px;">📭</div>
-      <h3 style="color:#1a1a1a;margin:0 0 8px;">Sin ventas aún</h3>
-      <p style="color:#888;font-size:14px;">${msg || 'Cuando alguien contrate tus servicios, aparecerán aquí.'}</p>
-    </div>`;
-}
-
-// ── Renderizar lista de ventas ──────────────────────────
-function renderMisVentas(filtro) {
-  const container = document.getElementById('mv-list');
-  let ventas = _misVentasData;
-
-  if (filtro) {
-    const q = filtro.toLowerCase();
-    ventas = ventas.filter(v =>
-      (v.folio||'').toLowerCase().includes(q) ||
-      (v.metodo_pago||'').toLowerCase().includes(q) ||
-      String(v.monto).includes(q)
-    );
-  }
-
-  // Stats
-  const totalVentas   = _misVentasData.length;
-  const totalMxn      = _misVentasData.reduce((s,v) => s + Number(v.monto||0), 0);
-  const ventasTarjeta = _misVentasData.filter(v => v.metodo_pago === 'tarjeta').length;
-  const ventasAca     = _misVentasData.filter(v => v.metodo_pago === 'acapoints').length;
-  const ventasEfect   = _misVentasData.filter(v => v.metodo_pago === 'efectivo').length;
-
-  document.getElementById('mv-stat-total').textContent  = totalVentas;
-  document.getElementById('mv-stat-monto').textContent  = '$' + totalMxn.toLocaleString('es-MX') + ' MXN';
-  document.getElementById('mv-stat-tarjeta').textContent= ventasTarjeta;
-  document.getElementById('mv-stat-aca').textContent    = ventasAca;
-
-  if (ventas.length === 0) { renderMisVentasVacio(); return; }
-
-  const metIcono = { efectivo:'💵', tarjeta:'💳', acapoints:'🪙' };
-  const metLabel = { efectivo:'Efectivo', tarjeta:'Tarjeta', acapoints:'AcaPoints' };
-  const metColor = { efectivo:'#e8f5e9', tarjeta:'#e3f2fd', acapoints:'#fff8e1' };
-  const metBorder= { efectivo:'#a5d6a7', tarjeta:'#90caf9', acapoints:'#ffe082' };
-  const metText  = { efectivo:'#2e7d32', tarjeta:'#1565c0', acapoints:'#f57f17' };
-
-  container.innerHTML = ventas.map(v => {
-    const fecha = new Date(v.creado_en).toLocaleDateString('es-MX', {
-      day:'2-digit', month:'short', year:'numeric'
-    });
-    const hora = new Date(v.creado_en).toLocaleTimeString('es-MX', {
-      hour:'2-digit', minute:'2-digit'
-    });
-    const folio = v.folio || ('ACA-' + String(v.id).toUpperCase());
-    const monto = Number(v.monto||0);
-    const met   = v.metodo_pago || 'efectivo';
-
-    return `
-    <div class="mv-card" onclick="openVentaDetalle('${v.id}')">
-
-      <div class="mv-folio-strip">
-        <div class="mv-folio-id">
-          <span class="mv-folio-label">ID de venta</span>
-          <span class="mv-folio-num">#${v.id}</span>
-        </div>
-        <div class="mv-folio-code">
-          <span class="mv-folio-label">Folio</span>
-          <span class="mv-folio-val">${folio}</span>
-        </div>
-        <div class="mv-estado-badge">✅ Completado</div>
-      </div>
-
-      <div class="mv-card-body">
-        <div class="mv-info-row">
-          <div class="mv-monto-block">
-            <span class="mv-monto-label">Monto recibido</span>
-            <span class="mv-monto-val">$${monto.toLocaleString('es-MX')} <small>MXN</small></span>
-          </div>
-          <div class="mv-metodo-block" style="background:${metColor[met]};border:1.5px solid ${metBorder[met]};">
-            <span style="font-size:18px;">${metIcono[met]}</span>
-            <span style="color:${metText[met]};font-weight:700;font-size:13px;">${metLabel[met]}</span>
-          </div>
-        </div>
-
-        <div class="mv-meta-row">
-          <span>🗓️ ${fecha} · ${hora}</span>
-          ${v.tarjeta_ultimos4 ? `<span>💳 ···· ${v.tarjeta_ultimos4}</span>` : ''}
-          ${v.acapoints_usados > 0 ? `<span>🪙 ${v.acapoints_usados} pts</span>` : ''}
-        </div>
-      </div>
-
-      <div class="mv-arrow">›</div>
-    </div>`;
-  }).join('');
-}
-
-// ── Detalle de una venta ────────────────────────────────
-function openVentaDetalle(id) {
-  const v = _misVentasData.find(x => String(x.id) === String(id));
-  if (!v) return;
-
-  const folio  = v.folio || ('ACA-' + String(v.id).toUpperCase());
-  const monto  = Number(v.monto||0);
-  const met    = v.metodo_pago || 'efectivo';
-  const metLbl = { efectivo:'💵 Efectivo', tarjeta:'💳 Tarjeta simulada', acapoints:'🪙 AcaPoints' };
-  const fecha  = new Date(v.creado_en).toLocaleDateString('es-MX', {
-    weekday:'long', day:'2-digit', month:'long', year:'numeric'
-  });
-  const hora   = new Date(v.creado_en).toLocaleTimeString('es-MX', {
-    hour:'2-digit', minute:'2-digit', second:'2-digit'
-  });
-
-  document.getElementById('venta-detalle-body').innerHTML = `
-
-    <div class="vd-hero">
-      <div class="vd-hero-icon">📦</div>
-      <div class="vd-hero-id">#${v.id}</div>
-      <div class="vd-hero-folio">${folio}</div>
-      <div class="vd-hero-estado">✅ Venta completada</div>
-    </div>
-
-    <div class="vd-monto-grande">
-      <span class="vd-monto-lbl">Monto recibido</span>
-      <span class="vd-monto-num">$${monto.toLocaleString('es-MX')} MXN</span>
-    </div>
-
-    <div class="vd-section">
-      <div class="vd-section-title">🪪 Identificación</div>
-      <div class="vd-row">
-        <span>ID de venta</span>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <strong style="font-family:monospace;font-size:16px;color:#007a7a;">#${v.id}</strong>
-          <button class="cd-copy-btn" onclick="copyFolio('${v.id}')">📋</button>
-        </div>
-      </div>
-      <div class="vd-row">
-        <span>Folio</span>
-        <div style="display:flex;align-items:center;gap:8px;">
-          <strong style="font-family:monospace;font-size:13px;">${folio}</strong>
-          <button class="cd-copy-btn" onclick="copyFolio('${folio}')">📋</button>
-        </div>
-      </div>
-    </div>
-
-    <div class="vd-section">
-      <div class="vd-section-title">💰 Detalle del pago</div>
-      <div class="vd-row"><span>Monto</span><strong style="color:#007a7a;font-size:18px;">$${monto.toLocaleString('es-MX')} MXN</strong></div>
-      <div class="vd-row"><span>Método</span><strong>${metLbl[met]||met}</strong></div>
-      ${v.tarjeta_ultimos4 ? `<div class="vd-row"><span>Tarjeta</span><strong>•••• •••• •••• ${v.tarjeta_ultimos4}</strong></div>` : ''}
-      ${v.tarjeta_titular  ? `<div class="vd-row"><span>Titular</span><strong>${v.tarjeta_titular}</strong></div>` : ''}
-      ${v.acapoints_usados > 0 ? `<div class="vd-row"><span>AcaPoints usados</span><strong>🪙 ${v.acapoints_usados}</strong></div>` : ''}
-      <div class="vd-row"><span>Estado</span><span class="vd-badge-ok">✅ Completado</span></div>
-    </div>
-
-    <div class="vd-section">
-      <div class="vd-section-title">📅 Fecha y hora</div>
-      <div class="vd-row"><span>Fecha</span><strong>${fecha}</strong></div>
-      <div class="vd-row"><span>Hora</span><strong>${hora}</strong></div>
-    </div>
-
-
-
-    <div class="vd-section">
-      <div class="vd-section-title">✅ Verificación del cliente</div>
-      <p style="font-size:13px;color:#666;margin:0 0 10px;">El cliente puede mostrarte este folio para confirmar su compra.</p>
-      <div style="background:#f0faf8;border:1.5px solid #b2dfdb;border-radius:12px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
-        <div>
-          <div style="font-size:11px;color:#666;margin-bottom:3px;">Folio del cliente</div>
-          <div style="font-family:monospace;font-size:16px;font-weight:800;color:#007a7a;">${folio}</div>
-        </div>
-        <button class="cd-copy-btn" onclick="copyFolio('${folio}')">📋 Copiar</button>
-      </div>
-    </div>
-
-    <div class="cd-actions">
-      <button onclick="closeVentaDetalle()" class="cd-btn-secondary">‹ Volver a mis ventas</button>
-    </div>
-  `;
-
-  document.getElementById('misventas-overlay').style.display = 'none';
-  const det = document.getElementById('venta-detalle-overlay');
-  det.style.display = 'flex';
-  det.style.alignItems = 'flex-start';
-  det.style.justifyContent = 'center';
-}
-
-function closeVentaDetalle() {
-  document.getElementById('venta-detalle-overlay').style.display = 'none';
-  openMisVentas();
-}
-
-
-/* =====================================================
-   ADMIN — PANEL DE ROLES
-   ===================================================== */
-
-async function renderAdminRoles() {
-  const list = document.getElementById('admin-list');
-  list.innerHTML = `<div style="text-align:center;padding:30px;color:#aaa;">Cargando roles...</div>`;
-
-  try {
-    const [roles, usuarios, historial] = await Promise.all([
-      supaFetch('/rest/v1/roles?order=nivel.desc&select=*'),
-      supaFetch('/rest/v1/usuarios?select=id,nombre,email,rol,tipo&order=nombre.asc'),
-      supaFetch('/rest/v1/historial_roles?order=cambiado_en.desc&limit=10&select=*').catch(()=>[])
-    ]);
-
-    const countByRol = {};
-    (usuarios||[]).forEach(u => {
-      const r = u.rol || u.tipo || 'cliente';
-      countByRol[r] = (countByRol[r]||0) + 1;
-    });
-
-    const COLORS = { admin:'#E53935', supervisor:'#F57C00', vendedor:'#1976D2', cliente:'#388E3C' };
-    const BG     = { admin:'#FFEBEE', supervisor:'#FFF3E0', vendedor:'#E3F2FD', cliente:'#E8F5E9' };
-
-    list.innerHTML = `
-    <div style="padding:4px 0;">
-
-      <!-- Botón exportar PDF -->
-      <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
-        <button onclick="exportarUsuariosPDF()"
-          style="background:#1565C0;color:#fff;border:none;border-radius:20px;padding:8px 16px;
-                 font-family:'DM Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer;
-                 display:flex;align-items:center;gap:6px;">
-          📄 Exportar usuarios PDF
-        </button>
-      </div>
-
-      <!-- Tarjetas de roles -->
-      <div style="font-size:12px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;">
-        Roles del sistema
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:20px;">
-        ${(roles||[]).map(r => `
-        <div style="background:${BG[r.slug]||'#f5f5f5'};border:1.5px solid ${COLORS[r.slug]||'#ccc'};
-                    border-radius:14px;padding:14px 16px;">
-          <div style="font-size:24px;margin-bottom:4px;">${r.icono}</div>
-          <div style="font-size:15px;font-weight:800;color:${COLORS[r.slug]||'#333'};">${r.nombre}</div>
-          <div style="font-size:11px;color:#888;margin:4px 0 8px;">${r.descripcion}</div>
-          <div style="display:flex;justify-content:space-between;align-items:center;">
-            <span style="background:${COLORS[r.slug]||'#888'};color:white;font-size:12px;font-weight:700;
-                         padding:3px 10px;border-radius:20px;">${countByRol[r.slug]||0} usuarios</span>
-            <span style="font-size:11px;color:#aaa;">Nivel ${r.nivel}</span>
-          </div>
-        </div>`).join('')}
-      </div>
-
-      <!-- Lista de usuarios con rol -->
-      <div style="font-size:12px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;">
-        Usuarios y sus roles
-      </div>
-      <div style="background:#fff;border:1.5px solid #e8e8e8;border-radius:14px;overflow:hidden;margin-bottom:20px;">
-        ${(usuarios||[]).map(u => {
-          const r   = u.rol || u.tipo || 'cliente';
-          const esYo = currentUser && u.id === currentUser.id;
-          return `
-          <div style="display:flex;align-items:center;gap:12px;padding:11px 16px;border-bottom:1px solid #f5f5f5;">
-            <div style="width:34px;height:34px;border-radius:50%;background:${BG[r]||'#f5f5f5'};
-                        display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;">
-              ${{ admin:'👑', supervisor:'🔍', vendedor:'🏪', cliente:'👤' }[r]||'👤'}
-            </div>
-            <div style="flex:1;min-width:0;">
-              <div style="font-size:13px;font-weight:700;color:#1a1a1a;">${u.nombre} ${esYo?'<span style="font-size:10px;background:#eee;padding:1px 6px;border-radius:10px;color:#888;">Tú</span>':''}</div>
-              <div style="font-size:11px;color:#aaa;">${u.email}</div>
-            </div>
-            ${esYo
-              ? `<span style="font-size:11px;color:#aaa;padding:5px 10px;">—</span>`
-              : `<select onchange="cambiarRol('${u.id}',this.value,'${r}')"
-                  style="border:1.5px solid ${COLORS[r]||'#ccc'};background:${BG[r]||'#f5f5f5'};
-                         color:${COLORS[r]||'#333'};font-family:'DM Sans',sans-serif;font-size:12px;
-                         font-weight:700;padding:5px 10px;border-radius:20px;cursor:pointer;outline:none;">
-                  <option value="admin"      ${r==='admin'      ?'selected':''}>👑 Admin</option>
-                  <option value="supervisor" ${r==='supervisor' ?'selected':''}>🔍 Supervisor</option>
-                  <option value="vendedor"   ${r==='vendedor'   ?'selected':''}>🏪 Vendedor</option>
-                  <option value="cliente"    ${r==='cliente'    ?'selected':''}>👤 Cliente</option>
-                </select>`
+    // ── Gráfica ingresos por mes ──────────────────────────
+    if (window.Chart) {
+      const ctx = document.getElementById('ag-chart-meses');
+      if (ctx) {
+        new Chart(ctx, {
+          type: 'bar',
+          data: {
+            labels: meses,
+            datasets: [
+              { label: 'Ingresos ($MXN)',  data: Object.values(comprasMes),
+                backgroundColor: 'rgba(46,125,50,0.75)', borderRadius: 6, borderSkipped: false },
+              { label: 'Retiros (cant.)',   data: Object.values(retirosMes),
+                backgroundColor: 'rgba(21,101,192,0.6)', borderRadius: 6, borderSkipped: false, type: 'line',
+                borderColor: '#1565C0', pointRadius: 4, tension: 0.3, fill: false, yAxisID: 'y2' }
+            ]
+          },
+          options: {
+            responsive: true,
+            plugins: { legend: { position: 'bottom', labels: { font: { size: 11 } } } },
+            scales: {
+              y:  { beginAtZero: true, position: 'left', title: { display:true, text:'MXN' } },
+              y2: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display:true, text:'Retiros' } },
+              x:  { grid: { display: false } }
             }
-          </div>`;
-        }).join('')}
-      </div>
-
-      <!-- Historial reciente -->
-      <div style="font-size:12px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;">
-        Cambios recientes de rol
-      </div>
-      <div style="background:#fff;border:1.5px solid #e8e8e8;border-radius:14px;overflow:hidden;">
-        ${(historial||[]).length === 0
-          ? `<p style="text-align:center;color:#aaa;padding:20px;font-size:13px;">Sin cambios registrados</p>`
-          : (historial||[]).map(h => {
-              const fecha = new Date(h.cambiado_en).toLocaleDateString('es-MX',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
-              return `
-              <div style="display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid #f5f5f5;font-size:12px;">
-                <span style="font-size:16px;">🔄</span>
-                <div style="flex:1;">
-                  <strong>Usuario #${h.usuario_id}</strong>
-                  <span style="color:#aaa;"> · ${h.rol_anterior||'—'} → </span>
-                  <span style="color:${COLORS[h.rol_nuevo]||'#333'};font-weight:700;">${h.rol_nuevo}</span>
-                </div>
-                <span style="color:#bbb;white-space:nowrap;">${fecha}</span>
-              </div>`;
-            }).join('')
-        }
-      </div>
-
-    </div>`;
-  } catch(e) {
-    list.innerHTML = `<p style="color:red;padding:20px;font-size:13px;">Error al cargar roles: ${e.message}</p>`;
-  }
-}
-
-/* =====================================================
-   SOLICITUD DE VERIFICACIÓN VENDEDOR
-   ===================================================== */
-
-async function verificarSolicitudVendedor() {
-  try {
-    const data = await supaFetch(
-      '/rest/v1/datos_vendedor?usuario_id=eq.' + currentUser.id + '&select=estado,motivo_rechazo'
-    );
-    if (data && data.length > 0) {
-      const sol = data[0];
-      if (sol.estado === 'pendiente') {
-        mostrarEstadoSolicitud('⏳', 'Solicitud en revisión',
-          'Tu solicitud para ser vendedor está siendo revisada. Te notificaremos cuando sea aprobada.', false);
-        return;
-      }
-      if (sol.estado === 'aprobado') {
-        // Ya es vendedor pero el campo rol no se actualizó localmente
-        mostrarEstadoSolicitud('✅', '¡Ya eres vendedor!',
-          'Tu cuenta ya fue verificada. Recarga la página para publicar tu servicio.', false);
-        return;
-      }
-      if (sol.estado === 'rechazado') {
-        mostrarEstadoSolicitud('❌', 'Solicitud rechazada',
-          'Tu solicitud fue rechazada.' + (sol.motivo_rechazo ? ' Motivo: ' + sol.motivo_rechazo : '') +
-          ' Puedes volver a enviar una nueva solicitud.', true);
-        return;
+          }
+        });
       }
     }
-  } catch(e) {}
-  // Sin solicitud previa → mostrar formulario
-  abrirSolicitudVendedor();
-}
-
-function abrirSolicitudVendedor() {
-  const ovl = document.getElementById('sv-overlay');
-  ovl.style.display = 'block';
-  document.body.style.overflow = 'hidden';
-}
-
-function closeSolicitudVendedor() {
-  document.getElementById('sv-overlay').style.display = 'none';
-  document.body.style.overflow = '';
-}
-
-function mostrarEstadoSolicitud(icon, titulo, msg, mostrarReenviar) {
-  document.getElementById('sv-estado-icon').textContent   = icon;
-  document.getElementById('sv-estado-titulo').textContent = titulo;
-  document.getElementById('sv-estado-msg').textContent    = msg;
-  const ovl = document.getElementById('sv-estado-overlay');
-  ovl.style.display = 'flex';
-}
-
-function svPreview(input, boxId, prevId) {
-  const file = input.files[0];
-  if (!file) return;
-  const ph   = document.getElementById(boxId).querySelector('.sv-upload-ph');
-  const prev = document.getElementById(prevId);
-  if (file.type.startsWith('image/')) {
-    const reader = new FileReader();
-    reader.onload = e => {
-      prev.src = e.target.result;
-      prev.style.display = 'block';
-      if (ph) ph.style.display = 'none';
-    };
-    reader.readAsDataURL(file);
-  } else {
-    if (ph) ph.innerHTML = `<span style="font-size:20px;">📄</span><span>${file.name}</span>`;
-  }
-}
-
-async function enviarSolicitudVendedor() {
-  const nombre  = document.getElementById('sv-nombre').value.trim();
-  const curp    = document.getElementById('sv-curp').value.trim().toUpperCase();
-  const fileIne = document.getElementById('sv-file-ine').files[0];
-  const fileActa= document.getElementById('sv-file-acta').files[0];
-
-  if (!nombre)   { showToast('⚠️ Ingresa tu nombre completo'); return; }
-  if (curp.length !== 18) { showToast('⚠️ La CURP debe tener 18 caracteres'); return; }
-  if (!fileIne)  { showToast('⚠️ Sube la foto del frente de tu INE'); return; }
-  if (!fileActa) { showToast('⚠️ Sube tu acta de nacimiento'); return; }
-
-  const btn = document.getElementById('sv-btn-enviar');
-  btn.textContent = 'Subiendo documentos...'; btn.disabled = true;
-
-  try {
-    // Subir imágenes a Supabase Storage
-    const ineUrl   = await uploadToStorage(fileIne,  'vendedores/' + currentUser.id);
-    const actaUrl  = await uploadToStorage(fileActa, 'vendedores/' + currentUser.id);
-
-    const fileIner  = document.getElementById('sv-file-iner').files[0];
-    const fileSelfie= document.getElementById('sv-file-selfie').files[0];
-    const inerUrl   = fileIner   ? await uploadToStorage(fileIner,   'vendedores/' + currentUser.id) : null;
-    const selfieUrl = fileSelfie ? await uploadToStorage(fileSelfie, 'vendedores/' + currentUser.id) : null;
-
-    btn.textContent = 'Enviando solicitud...';
-
-    // Guardar en datos_vendedor (upsert por si ya tenía rechazada)
-    await fetch(SUPA_URL + '/rest/v1/datos_vendedor', {
-      method: 'POST',
-      headers: {
-        'apikey': SUPA_KEY, 'Authorization': 'Bearer ' + SUPA_KEY,
-        'Content-Type': 'application/json',
-        'Prefer': 'resolution=merge-duplicates,return=minimal'
-      },
-      body: JSON.stringify({
-        usuario_id:      currentUser.id,
-        nombre_completo: nombre,
-        curp,
-        ine_url:         ineUrl,
-        ine_reverso_url: inerUrl,
-        acta_url:        actaUrl,
-        selfie_url:      selfieUrl,
-        estado:          'pendiente',
-        motivo_rechazo:  null
-      })
-    });
-
-    closeSolicitudVendedor();
-    mostrarEstadoSolicitud('🎉', '¡Solicitud enviada!',
-      'Revisaremos tus documentos en las próximas 24 horas. Te notificaremos cuando tu cuenta sea aprobada como vendedor.',
-      false);
 
   } catch(e) {
-    showToast('❌ Error: ' + e.message);
-  } finally {
-    btn.textContent = 'Enviar solicitud'; btn.disabled = false;
+    list.innerHTML = `<div style="text-align:center;padding:30px;color:#c62828;">❌ Error: ${e.message}</div>`;
+    console.error(e);
   }
 }
 
@@ -5340,7 +4906,7 @@ async function renderAdminAnalytics() {
    EXPORTAR REPORTE DE GANANCIAS — PDF
    ===================================================== */
 
-function exportarGananciasPDF() {
+async function exportarGananciasPDF() {
   const btn = document.querySelector('button[onclick="exportarGananciasPDF()"]');
   if (btn) { btn.textContent = '⏳ Generando...'; btn.disabled = true; }
 
@@ -5374,29 +4940,28 @@ function exportarGananciasPDF() {
     doc.text(`Generado: ${fecha}  ${hora}`, W-14, 18, { align:'right' });
     doc.text(`Admin: ${currentUser?.nombre||'—'}`, W-14, 24, { align:'right' });
 
-    // Recopilar datos (mismo cálculo que renderAdminGanancias)
+    // Leer datos desde Supabase
+    const [txsDB, pagosDB] = await Promise.all([
+      supaFetch('/rest/v1/transacciones_acapoints?select=tipo,puntos,monto_mxn,creado_en'),
+      supaFetch('/rest/v1/pagos?select=metodo_pago,monto&order=creado_en.desc').catch(()=>[]),
+    ]);
     let totalVentaAca=0, totalGananciaAca=0, totalTransacciones=0;
     let totalRetirosAca=0, totalGananciaRetiros=0;
     const ventasPorPaquete = {50:0,100:0,200:0,500:0};
-    try {
-      for (let i=0; i<localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key?.startsWith('aca_tx_')) {
-          const txs = JSON.parse(localStorage.getItem(key)||'[]');
-          txs.forEach(tx => {
-            if (tx.tipo==='compra' && tx.monto_mxn) {
-              const mxn = Number(tx.monto_mxn);
-              const pkg = ACA_PACKAGES.find(p=>p.mxn===mxn);
-              if (pkg) { totalVentaAca+=pkg.mxn; totalGananciaAca+=pkg.ganancia; totalTransacciones++; ventasPorPaquete[pkg.mxn]=(ventasPorPaquete[pkg.mxn]||0)+1; }
-            }
-            if (tx.tipo==='reembolso' && tx.puntos) {
-              totalRetirosAca+=Number(tx.puntos); totalGananciaRetiros+=Number(tx.puntos)*MARGEN_RETIRO_ACA;
-            }
-          });
-        }
+    (txsDB||[]).forEach(tx => {
+      if (tx.tipo==='compra' && tx.monto_mxn) {
+        const mxn = Number(tx.monto_mxn);
+        const pkg = ACA_PACKAGES.find(p=>p.mxn===mxn);
+        if (pkg) { totalVentaAca+=pkg.mxn; totalGananciaAca+=pkg.ganancia; totalTransacciones++; ventasPorPaquete[pkg.mxn]=(ventasPorPaquete[pkg.mxn]||0)+1; }
       }
-    } catch(e) {}
-    const totalGananciaBruta = totalGananciaAca + totalGananciaRetiros;
+      if (tx.tipo==='reembolso' && tx.puntos) {
+        totalRetirosAca+=Number(tx.puntos); totalGananciaRetiros+=Number(tx.puntos)*MARGEN_RETIRO_ACA;
+      }
+    });
+    const COMISION_TARJETA = 0.05;
+    const totalPagosTarjeta = (pagosDB||[]).filter(p=>p.metodo_pago==='tarjeta').reduce((s,p)=>s+Number(p.monto||0),0);
+    const gananciaTarjeta   = totalPagosTarjeta * COMISION_TARJETA;
+    const totalGananciaBruta = totalGananciaAca + totalGananciaRetiros + gananciaTarjeta;
     const margenProm = totalVentaAca>0 ? ((totalGananciaAca/totalVentaAca)*100).toFixed(1) : '15.0';
 
     // ── KPI boxes ──
@@ -5674,4 +5239,209 @@ async function exportarAnalyticsPDF() {
     if (btn) { btn.textContent = '📄 Exportar reporte PDF'; btn.disabled = false; }
   }
 }
+
+
+/* =====================================================
+   HORARIOS Y DISPONIBILIDAD — PUBLICACIÓN
+   ===================================================== */
+
+const DIAS = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+const DIAS_SHORT = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+let _dispTipo = 'ilimitado';
+
+// ── Inicializar horario grid al cargar la página ─────────
+function initHorarioGrid() {
+  const grid = document.getElementById('horario-grid');
+  if (!grid) return;
+  grid.innerHTML = DIAS.map((dia, i) => `
+    <div class="horario-row" id="hrow-${i}">
+      <label class="toggle-switch" style="flex-shrink:0;">
+        <input type="checkbox" id="h-activo-${i}" checked onchange="toggleDiaHorario(${i})"/>
+        <span class="toggle-slider"></span>
+      </label>
+      <span class="horario-dia">${dia}</span>
+      <div class="horario-horas" id="h-horas-${i}">
+        <input class="horario-input" type="time" id="h-open-${i}" value="09:00"/>
+        <span class="horario-sep">—</span>
+        <input class="horario-input" type="time" id="h-close-${i}" value="18:00"/>
+      </div>
+    </div>`).join('');
+}
+
+function toggleHorario(checkbox) {
+  const panel = document.getElementById('horario-panel');
+  const label = document.getElementById('horario-toggle-label');
+  if (checkbox.checked) {
+    panel.style.display = 'none';
+    label.textContent = 'Disponible siempre / sin horario fijo';
+  } else {
+    panel.style.display = 'block';
+    label.textContent = 'Horario personalizado por día';
+    initHorarioGrid();
+  }
+}
+
+function toggleDiaHorario(idx) {
+  const activo = document.getElementById('h-activo-' + idx).checked;
+  const horas  = document.getElementById('h-horas-' + idx);
+  const row    = document.getElementById('hrow-' + idx);
+  horas.style.opacity = activo ? '1' : '0.35';
+  horas.style.pointerEvents = activo ? 'auto' : 'none';
+  row.style.opacity = activo ? '1' : '0.5';
+}
+
+function selectDispTipo(btn) {
+  document.querySelectorAll('.disp-tipo-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  _dispTipo = btn.dataset.tipo;
+  const panel = document.getElementById('disp-panel');
+  panel.style.display = _dispTipo === 'ilimitado' ? 'none' : 'block';
+  // Actualizar placeholder según tipo
+  const input = document.getElementById('pub-disp-cantidad');
+  if (input) {
+    const placeholders = { diario:'Ej: 20 por día', semanal:'Ej: 100 por semana', total:'Ej: 50 en total', por_turno:'Ej: 8 por turno' };
+    input.placeholder = placeholders[_dispTipo] || 'Cantidad';
+  }
+}
+
+// ── Guardar horarios en Supabase ─────────────────────────
+async function guardarHorariosServicio(servicioId) {
+  const siempreAbierto = document.getElementById('pub-siempre-abierto')?.checked;
+  if (siempreAbierto) return; // No guardar horarios si es "siempre abierto"
+
+  const rows = [];
+  for (let i = 0; i < 7; i++) {
+    const activo = document.getElementById('h-activo-' + i)?.checked ?? true;
+    const apertura = document.getElementById('h-open-'  + i)?.value || '09:00';
+    const cierre   = document.getElementById('h-close-' + i)?.value || '18:00';
+    rows.push({ servicio_id: servicioId, dia: i, abierto: activo,
+                hora_apertura: activo ? apertura : null,
+                hora_cierre:   activo ? cierre   : null });
+  }
+  try {
+    await supaFetch('/rest/v1/horarios_servicio', {
+      method: 'POST',
+      body: JSON.stringify(rows)
+    });
+    // Marcar que tiene horario
+    supaFetch('/rest/v1/servicios?id=eq.' + servicioId, {
+      method: 'PATCH',
+      body: JSON.stringify({ tiene_horario: true, siempre_abierto: false })
+    }).catch(()=>{});
+  } catch(e) { console.warn('Error guardando horarios:', e.message); }
+}
+
+// ── Guardar disponibilidad en Supabase ───────────────────
+async function guardarDisponibilidadServicio(servicioId) {
+  if (_dispTipo === 'ilimitado') return;
+  const cantidad = parseInt(document.getElementById('pub-disp-cantidad')?.value) || null;
+  const unidad   = document.getElementById('pub-disp-unidad')?.value?.trim() || 'lugares';
+  const anticipo = parseInt(document.getElementById('pub-disp-anticipo')?.value) || 0;
+  if (!cantidad) return;
+  try {
+    await supaFetch('/rest/v1/disponibilidad_servicio', {
+      method: 'POST',
+      body: JSON.stringify({
+        servicio_id: servicioId, tipo_limite: _dispTipo,
+        limite_cantidad: cantidad, unidad_label: unidad,
+        anticipo_minimo_hrs: anticipo
+      })
+    });
+    supaFetch('/rest/v1/servicios?id=eq.' + servicioId, {
+      method: 'PATCH',
+      body: JSON.stringify({ tiene_disponibilidad: true })
+    }).catch(()=>{});
+  } catch(e) { console.warn('Error guardando disponibilidad:', e.message); }
+}
+
+// ── Cargar y mostrar horarios en detalle del servicio ────
+async function cargarHorarioDetalle(servicioId) {
+  const container = document.getElementById('detail-horario-disp');
+  if (!container) return;
+
+  try {
+    const [horarios, disp] = await Promise.all([
+      supaFetch('/rest/v1/horarios_servicio?servicio_id=eq.' + servicioId + '&order=dia.asc').catch(()=>[]),
+      supaFetch('/rest/v1/disponibilidad_servicio?servicio_id=eq.' + servicioId).catch(()=>[]),
+    ]);
+
+    let html = '';
+
+    // ── Horario ──
+    if (horarios && horarios.length > 0) {
+      const hoy = (new Date().getDay() + 6) % 7; // JS: 0=Dom → convertir a 0=Lun
+      const diaHoy = horarios.find(h => h.dia === hoy);
+      const ahoraMin = new Date().getHours()*60 + new Date().getMinutes();
+
+      let estadoHoy = '';
+      if (diaHoy) {
+        if (!diaHoy.abierto) {
+          estadoHoy = `<span class="hd-badge cerrado">🔴 Cerrado hoy</span>`;
+        } else {
+          const [oh, om] = (diaHoy.hora_apertura||'00:00').split(':').map(Number);
+          const [ch, cm] = (diaHoy.hora_cierre  ||'23:59').split(':').map(Number);
+          const abierto = ahoraMin >= oh*60+om && ahoraMin <= ch*60+cm;
+          estadoHoy = abierto
+            ? `<span class="hd-badge abierto">🟢 Abierto ahora · cierra ${diaHoy.hora_cierre}</span>`
+            : `<span class="hd-badge proximo">🟡 Abre hoy a las ${diaHoy.hora_apertura}</span>`;
+        }
+      }
+
+      html += `
+      <div class="hd-horario">
+        <div class="hd-horario-header">
+          <span style="font-weight:700;font-size:13px;">🕐 Horario</span>
+          ${estadoHoy}
+          <button class="hd-toggle-btn" onclick="toggleHorarioCompleto(this)">Ver todo ▾</button>
+        </div>
+        <div class="hd-semana" id="hd-semana-${servicioId}" style="display:none;">
+          ${horarios.map(h => {
+            const esHoy = h.dia === hoy;
+            return `<div class="hd-dia-row ${esHoy?'hoy':''}">
+              <span class="hd-dia-nombre">${DIAS_SHORT[h.dia]}</span>
+              ${h.abierto
+                ? `<span class="hd-dia-hrs">${h.hora_apertura||'—'} — ${h.hora_cierre||'—'}</span>`
+                : `<span class="hd-dia-cerrado">Cerrado</span>`}
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+    } else {
+      html += `<span class="hd-badge abierto" style="width:fit-content;">🟢 Disponible siempre</span>`;
+    }
+
+    // ── Disponibilidad ──
+    if (disp && disp.length > 0) {
+      const d = disp[0];
+      const tipoLabel = { diario:'al día', semanal:'a la semana', total:'en total', por_turno:'por turno' };
+      html += `
+      <div class="hd-disp">
+        <span class="hd-disp-icon">📦</span>
+        <div>
+          <span style="font-size:13px;font-weight:600;color:var(--text);">Disponibilidad: </span>
+          <span style="font-size:13px;color:var(--text-mid);">${d.limite_cantidad} ${d.unidad_label||'lugares'} ${tipoLabel[d.tipo_limite]||d.tipo_limite}</span>
+          ${d.anticipo_minimo_hrs > 0
+            ? `<br><span style="font-size:11px;color:#888;">⏰ Reserva con ${d.anticipo_minimo_hrs < 24 ? d.anticipo_minimo_hrs+'h' : (d.anticipo_minimo_hrs/24)+'d'} de anticipación</span>`
+            : ''}
+        </div>
+      </div>`;
+    }
+
+    container.innerHTML = html;
+  } catch(e) { console.warn('cargarHorarioDetalle:', e.message); }
+}
+
+function toggleHorarioCompleto(btn) {
+  const semana = btn.closest('.hd-horario').querySelector('.hd-semana');
+  const abierta = semana.style.display !== 'none';
+  semana.style.display = abierta ? 'none' : 'block';
+  btn.textContent = abierta ? 'Ver todo ▾' : 'Ocultar ▴';
+}
+
+// ── Patch openDetail to load horario ────────────────────
+const _origOpenDetailHD = openDetail;
+openDetail = function(s) {
+  _origOpenDetailHD(s);
+  cargarHorarioDetalle(s.id);
+};
 

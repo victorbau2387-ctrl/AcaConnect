@@ -471,6 +471,68 @@
         </div>
         <p class="hint">Los clientes te contactarán por WhatsApp. Si ya tienes teléfono en tu perfil, se usará ese por defecto.</p>
       </div>
+      <!-- HORARIO DE ATENCIÓN -->
+      <div class="form-group">
+        <label class="form-label">🕐 Horario de atención</label>
+        <div class="horario-toggle-row">
+          <label class="toggle-switch">
+            <input type="checkbox" id="pub-siempre-abierto" checked onchange="toggleHorario(this)"/>
+            <span class="toggle-slider"></span>
+          </label>
+          <span id="horario-toggle-label" style="font-size:14px;color:var(--text-mid);">Disponible siempre / sin horario fijo</span>
+        </div>
+        <div id="horario-panel" style="display:none;margin-top:14px;">
+          <div class="horario-grid" id="horario-grid">
+            <!-- Se genera por JS -->
+          </div>
+          <p class="hint" style="margin-top:8px;">Desactiva los días en que no ofreces el servicio.</p>
+        </div>
+      </div>
+
+      <!-- DISPONIBILIDAD / STOCK -->
+      <div class="form-group">
+        <label class="form-label">📦 Disponibilidad y límite de reservas</label>
+        <div class="disp-tipo-grid">
+          <button type="button" class="disp-tipo-btn active" data-tipo="ilimitado" onclick="selectDispTipo(this)">
+            <span>♾️</span><span>Sin límite</span>
+          </button>
+          <button type="button" class="disp-tipo-btn" data-tipo="diario" onclick="selectDispTipo(this)">
+            <span>📅</span><span>Límite diario</span>
+          </button>
+          <button type="button" class="disp-tipo-btn" data-tipo="semanal" onclick="selectDispTipo(this)">
+            <span>🗓️</span><span>Límite semanal</span>
+          </button>
+          <button type="button" class="disp-tipo-btn" data-tipo="total" onclick="selectDispTipo(this)">
+            <span>🔢</span><span>Stock total</span>
+          </button>
+        </div>
+        <div id="disp-panel" style="display:none;margin-top:14px;">
+          <div class="row-2">
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Cantidad máxima</label>
+              <input class="form-input" id="pub-disp-cantidad" type="number" min="1" placeholder="Ej: 20"/>
+            </div>
+            <div class="form-group" style="margin-bottom:0;">
+              <label class="form-label">Unidad</label>
+              <input class="form-input" id="pub-disp-unidad" type="text" placeholder="Ej: personas, lugares, habitaciones"/>
+            </div>
+          </div>
+          <div class="form-group" style="margin-top:12px;margin-bottom:0;">
+            <label class="form-label">⏰ Anticipación mínima para reservar</label>
+            <select class="form-select" id="pub-disp-anticipo">
+              <option value="0">Sin anticipación requerida</option>
+              <option value="1">1 hora antes</option>
+              <option value="2">2 horas antes</option>
+              <option value="6">6 horas antes</option>
+              <option value="12">12 horas antes</option>
+              <option value="24">1 día antes</option>
+              <option value="48">2 días antes</option>
+              <option value="72">3 días antes</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
       <!-- MÉTODOS DE PAGO ACEPTADOS -->
       <div class="form-group">
         <label class="form-label">Métodos de pago que aceptas <span class="req">*</span></label>
@@ -942,6 +1004,8 @@
         <div class="detail-price-box">
           <div class="detail-price" id="detail-price"></div>
           <div class="detail-price-type" id="detail-price-type"></div>
+          <!-- Horario y disponibilidad en detalle -->
+          <div id="detail-horario-disp" style="margin:10px 0;display:flex;flex-direction:column;gap:6px;"></div>
           <div id="detail-pay-methods" style="margin-bottom:10px;display:flex;gap:6px;flex-wrap:wrap;"></div>
           <button class="btn-pay-service" id="btn-pay" onclick="openPayModal()">🛒 Contratar y Pagar</button>
           <button class="btn-contact-provider" id="btn-contact" onclick="contactProvider()">Contactar proveedor</button>

@@ -2756,3 +2756,120 @@
   .an-kpi-val { font-size: 17px; }
 }
 
+
+/* =====================================================
+   HORARIOS Y DISPONIBILIDAD
+   ===================================================== */
+
+/* Toggle switch */
+.toggle-switch { position:relative; display:inline-block; width:44px; height:24px; flex-shrink:0; }
+.toggle-switch input { opacity:0; width:0; height:0; }
+.toggle-slider {
+  position:absolute; inset:0; cursor:pointer;
+  background:#ccc; border-radius:24px; transition:.3s;
+}
+.toggle-slider:before {
+  content:""; position:absolute;
+  width:18px; height:18px; left:3px; bottom:3px;
+  background:white; border-radius:50%; transition:.3s;
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--teal); }
+.toggle-switch input:checked + .toggle-slider:before { transform: translateX(20px); }
+
+.horario-toggle-row {
+  display: flex; align-items: center; gap: 12px;
+  background: var(--bg); border-radius: 12px;
+  padding: 12px 14px; border: 1.5px solid var(--border);
+}
+
+/* Horario grid */
+.horario-grid { display: flex; flex-direction: column; gap: 8px; }
+.horario-row {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--surface); border: 1.5px solid var(--border);
+  border-radius: 12px; padding: 10px 12px;
+  transition: opacity .2s;
+}
+.horario-dia { font-size: 13px; font-weight: 600; color: var(--text); width: 80px; flex-shrink: 0; }
+.horario-horas { display: flex; align-items: center; gap: 6px; flex: 1; }
+.horario-input {
+  border: 1.5px solid var(--border); border-radius: 8px;
+  padding: 6px 8px; font-family: 'DM Sans',sans-serif;
+  font-size: 13px; color: var(--text); background: var(--bg);
+  width: 90px;
+}
+.horario-sep { font-size: 12px; color: #aaa; }
+
+/* Disponibilidad tipo selector */
+.disp-tipo-grid {
+  display: grid; grid-template-columns: repeat(2,1fr);
+  gap: 8px; margin-top: 8px;
+}
+.disp-tipo-btn {
+  display: flex; flex-direction: column; align-items: center;
+  gap: 4px; padding: 12px 8px;
+  border: 2px solid var(--border); border-radius: 12px;
+  background: var(--surface); cursor: pointer;
+  font-family: 'DM Sans',sans-serif; font-size: 12px;
+  font-weight: 600; color: var(--text-mid);
+  transition: all .2s;
+}
+.disp-tipo-btn span:first-child { font-size: 22px; }
+.disp-tipo-btn.active {
+  border-color: var(--teal);
+  background: rgba(0,128,128,.08);
+  color: var(--teal);
+}
+
+/* Detalle: horario */
+.hd-horario {
+  background: var(--bg); border: 1.5px solid var(--border);
+  border-radius: 12px; padding: 10px 12px;
+  font-size: 13px;
+}
+.hd-horario-header {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+}
+.hd-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-size: 12px; font-weight: 600; padding: 3px 10px;
+  border-radius: 20px;
+}
+.hd-badge.abierto  { background: #e8f5e9; color: #2e7d32; }
+.hd-badge.cerrado  { background: #ffebee; color: #c62828; }
+.hd-badge.proximo  { background: #fff8e1; color: #f57f17; }
+.hd-toggle-btn {
+  margin-left: auto; background: none; border: none;
+  font-size: 12px; color: var(--teal); cursor: pointer;
+  font-family: 'DM Sans',sans-serif; font-weight: 600;
+  white-space: nowrap;
+}
+.hd-semana {
+  margin-top: 10px; display: flex; flex-direction: column; gap: 4px;
+}
+.hd-dia-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 5px 0; border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.hd-dia-row:last-child { border-bottom: none; }
+.hd-dia-row.hoy .hd-dia-nombre { color: var(--teal); font-weight: 700; }
+.hd-dia-nombre { width: 36px; font-weight: 600; color: var(--text-mid); }
+.hd-dia-hrs    { color: var(--text); }
+.hd-dia-cerrado { color: #aaa; font-style: italic; }
+
+/* Detalle: disponibilidad */
+.hd-disp {
+  display: flex; align-items: flex-start; gap: 8px;
+  background: var(--bg); border: 1.5px solid var(--border);
+  border-radius: 12px; padding: 10px 12px;
+}
+.hd-disp-icon { font-size: 18px; flex-shrink: 0; }
+
+/* Responsive */
+@media (max-width: 480px) {
+  .disp-tipo-grid  { grid-template-columns: repeat(2,1fr); }
+  .horario-dia     { width: 64px; font-size: 12px; }
+  .horario-input   { width: 76px; font-size: 12px; }
+}
+
