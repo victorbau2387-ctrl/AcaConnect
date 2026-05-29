@@ -1021,15 +1021,7 @@
         <h2>Panel de Administración</h2>
         <span class="badge-count" id="admin-badge">0</span>
       </div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <button onclick="exportarUsuariosPDF()" 
-          style="background:#1565C0;color:#fff;border:none;border-radius:20px;padding:7px 14px;
-                 font-family:'DM Sans',sans-serif;font-size:12px;font-weight:700;cursor:pointer;
-                 display:flex;align-items:center;gap:5px;white-space:nowrap;">
-          📄 Exportar PDF
-        </button>
-        <button class="modal-close" style="position:static;font-size:26px;" onclick="closeAdmin()">×</button>
-      </div>
+      <button class="modal-close" style="position:static;font-size:26px;" onclick="closeAdmin()">×</button>
     </div>
     <div class="admin-tabs">
       <button class="admin-tab active" data-tab="pendientes" onclick="switchAdminTab(this)">⏳ Pendientes</button>

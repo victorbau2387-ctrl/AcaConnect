@@ -3896,6 +3896,16 @@ function renderAdminGanancias() {
   list.innerHTML = `
     <div class="ag-wrapper">
 
+      <!-- Botón exportar PDF -->
+      <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
+        <button onclick="exportarGananciasPDF()"
+          style="background:#2e7d32;color:#fff;border:none;border-radius:20px;padding:8px 16px;
+                 font-family:'DM Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer;
+                 display:flex;align-items:center;gap:6px;">
+          📄 Exportar reporte PDF
+        </button>
+      </div>
+
       <!-- KPI cards -->
       <div class="ag-kpis">
         <div class="ag-kpi verde">
@@ -4274,6 +4284,16 @@ async function renderAdminRoles() {
 
     list.innerHTML = `
     <div style="padding:4px 0;">
+
+      <!-- Botón exportar PDF -->
+      <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
+        <button onclick="exportarUsuariosPDF()"
+          style="background:#1565C0;color:#fff;border:none;border-radius:20px;padding:8px 16px;
+                 font-family:'DM Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer;
+                 display:flex;align-items:center;gap:6px;">
+          📄 Exportar usuarios PDF
+        </button>
+      </div>
 
       <!-- Tarjetas de roles -->
       <div style="font-size:12px;font-weight:700;color:#aaa;text-transform:uppercase;letter-spacing:.07em;margin-bottom:10px;">
@@ -5068,6 +5088,16 @@ async function renderAdminAnalytics() {
     list.innerHTML = `
     <div class="an-wrap">
 
+      <!-- Botón exportar PDF -->
+      <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
+        <button onclick="exportarAnalyticsPDF()"
+          style="background:#6A1B9A;color:#fff;border:none;border-radius:20px;padding:8px 16px;
+                 font-family:'DM Sans',sans-serif;font-size:13px;font-weight:700;cursor:pointer;
+                 display:flex;align-items:center;gap:6px;">
+          📄 Exportar reporte PDF
+        </button>
+      </div>
+
       <!-- KPIs -->
       <div class="an-kpis">
         <div class="an-kpi" style="--ac:#6A1B9A;--bg:#F3E5F5;">
@@ -5302,6 +5332,346 @@ async function renderAdminAnalytics() {
   } catch(e) {
     list.innerHTML = `<div style="text-align:center;padding:40px;color:#c62828;">
       ❌ Error al cargar analytics: ${e.message}</div>`;
+  }
+}
+
+
+/* =====================================================
+   EXPORTAR REPORTE DE GANANCIAS — PDF
+   ===================================================== */
+
+function exportarGananciasPDF() {
+  const btn = document.querySelector('button[onclick="exportarGananciasPDF()"]');
+  if (btn) { btn.textContent = '⏳ Generando...'; btn.disabled = true; }
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+    const W = doc.internal.pageSize.getWidth();
+    const H = doc.internal.pageSize.getHeight();
+    const now  = new Date();
+    const fecha = now.toLocaleDateString('es-MX', { day:'2-digit', month:'long', year:'numeric' });
+    const hora  = now.toLocaleTimeString('es-MX', { hour:'2-digit', minute:'2-digit' });
+
+    // Paleta
+    const DARK  = [10,31,31];  const GREEN = [46,125,50];
+    const LGREE = [232,245,233]; const WHITE = [255,255,255];
+    const GRAY  = [100,100,100]; const GOLD  = [245,127,23];
+
+    // ── Encabezado ──
+    doc.setFillColor(...DARK);
+    doc.rect(0, 0, W, 42, 'F');
+    doc.setFillColor(0,95,95);
+    doc.circle(18, 21, 9, 'F');
+    doc.setTextColor(...WHITE);
+    doc.setFontSize(10); doc.setFont('helvetica','bold');
+    doc.text('AC', 18, 24, { align:'center' });
+    doc.setFontSize(18); doc.text('AcaConnect', 32, 18);
+    doc.setFontSize(9); doc.setFont('helvetica','normal');
+    doc.setTextColor(180,220,210);
+    doc.text('Reporte de Ganancias — AcaPoints', 32, 25);
+    doc.setTextColor(...WHITE); doc.setFontSize(8);
+    doc.text(`Generado: ${fecha}  ${hora}`, W-14, 18, { align:'right' });
+    doc.text(`Admin: ${currentUser?.nombre||'—'}`, W-14, 24, { align:'right' });
+
+    // Recopilar datos (mismo cálculo que renderAdminGanancias)
+    let totalVentaAca=0, totalGananciaAca=0, totalTransacciones=0;
+    let totalRetirosAca=0, totalGananciaRetiros=0;
+    const ventasPorPaquete = {50:0,100:0,200:0,500:0};
+    try {
+      for (let i=0; i<localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key?.startsWith('aca_tx_')) {
+          const txs = JSON.parse(localStorage.getItem(key)||'[]');
+          txs.forEach(tx => {
+            if (tx.tipo==='compra' && tx.monto_mxn) {
+              const mxn = Number(tx.monto_mxn);
+              const pkg = ACA_PACKAGES.find(p=>p.mxn===mxn);
+              if (pkg) { totalVentaAca+=pkg.mxn; totalGananciaAca+=pkg.ganancia; totalTransacciones++; ventasPorPaquete[pkg.mxn]=(ventasPorPaquete[pkg.mxn]||0)+1; }
+            }
+            if (tx.tipo==='reembolso' && tx.puntos) {
+              totalRetirosAca+=Number(tx.puntos); totalGananciaRetiros+=Number(tx.puntos)*MARGEN_RETIRO_ACA;
+            }
+          });
+        }
+      }
+    } catch(e) {}
+    const totalGananciaBruta = totalGananciaAca + totalGananciaRetiros;
+    const margenProm = totalVentaAca>0 ? ((totalGananciaAca/totalVentaAca)*100).toFixed(1) : '15.0';
+
+    // ── KPI boxes ──
+    const kpis = [
+      { label:'Ganancia bruta',      val:'$'+totalGananciaBruta.toFixed(2)+' MXN', color:GREEN },
+      { label:'Ventas AcaPoints',    val:'$'+totalVentaAca+' MXN',                color:[21,101,192] },
+      { label:'Margen promedio',     val:margenProm+'%',                           color:GOLD },
+      { label:'Transacciones',       val:String(totalTransacciones),               color:[106,27,154] },
+    ];
+    const kpiW = (W-28)/4;
+    kpis.forEach((k,i) => {
+      const x = 14 + i*(kpiW+2);
+      doc.setFillColor(...LGREE);
+      doc.roundedRect(x, 48, kpiW, 20, 3,3,'F');
+      doc.setFillColor(...k.color);
+      doc.roundedRect(x, 48, 4, 20, 2,2,'F');
+      doc.setTextColor(...k.color);
+      doc.setFontSize(12); doc.setFont('helvetica','bold');
+      doc.text(k.val, x+kpiW/2+2, 57, { align:'center' });
+      doc.setTextColor(...GRAY); doc.setFontSize(7); doc.setFont('helvetica','normal');
+      doc.text(k.label, x+kpiW/2+2, 64, { align:'center' });
+    });
+
+    // ── Tabla de desglose por paquete ──
+    doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.setTextColor(...DARK);
+    doc.text('Desglose por paquete', 14, 78);
+
+    const rowsPaq = ACA_PACKAGES.map(p => [
+      '$'+p.mxn+' MXN → '+p.pts+' pts',
+      String(ventasPorPaquete[p.mxn]||0),
+      '$'+((ventasPorPaquete[p.mxn]||0)*p.mxn).toLocaleString('es-MX'),
+      '$'+((ventasPorPaquete[p.mxn]||0)*p.pts).toLocaleString('es-MX'),
+      '+$'+((ventasPorPaquete[p.mxn]||0)*p.ganancia).toLocaleString('es-MX'),
+      p.margen+'%'
+    ]);
+    rowsPaq.push([
+      'Retiros AcaPoints',
+      totalRetirosAca.toFixed(0)+' pts',
+      '—', '—',
+      '+$'+totalGananciaRetiros.toFixed(2),
+      '20%'
+    ]);
+    rowsPaq.push([
+      'TOTAL', String(totalTransacciones),
+      '$'+totalVentaAca.toLocaleString('es-MX'),
+      '$'+(totalVentaAca-totalGananciaAca).toLocaleString('es-MX'),
+      '+$'+totalGananciaBruta.toFixed(2),
+      margenProm+'%'
+    ]);
+
+    doc.autoTable({
+      startY: 82,
+      head: [['Paquete','Ventas','Ingresos','Costo','Ganancia','Margen']],
+      body: rowsPaq,
+      theme: 'grid',
+      styles: { font:'helvetica', fontSize:8, cellPadding:3, textColor:[40,40,40], lineColor:[220,220,220], lineWidth:0.2 },
+      headStyles: { fillColor:DARK, textColor:WHITE, fontSize:8, fontStyle:'bold', cellPadding:4 },
+      columnStyles: { 4:{textColor:GREEN,fontStyle:'bold'}, 5:{halign:'center'} },
+      alternateRowStyles: { fillColor:[248,252,250] },
+      didDrawPage: () => {
+        doc.setFillColor(...DARK); doc.rect(0,H-10,W,10,'F');
+        doc.setTextColor(...WHITE); doc.setFontSize(7);
+        doc.text('AcaConnect — Reporte Confidencial',14,H-4);
+        doc.text(`Página ${doc.internal.getCurrentPageInfo().pageNumber}`,W-14,H-4,{align:'right'});
+      }
+    });
+
+    // ── Política de precios ──
+    const finalY = doc.lastAutoTable.finalY + 10;
+    doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.setTextColor(...DARK);
+    doc.text('Política de precios vigente', 14, finalY);
+    doc.autoTable({
+      startY: finalY+4,
+      head: [['Concepto','Valor']],
+      body: [
+        ['Valor de compra (1 AcaPoint)','$1.00 MXN'],
+        ['Tasa de retiro (1 AcaPoint)','$0.80 MXN'],
+        ['Ganancia por retiro / punto','$0.20 MXN'],
+        ['Margen mínimo garantizado','15%'],
+      ],
+      theme: 'grid',
+      styles: { font:'helvetica', fontSize:8, cellPadding:3, lineColor:[220,220,220], lineWidth:0.2 },
+      headStyles: { fillColor:GREEN, textColor:WHITE, fontSize:8, fontStyle:'bold' },
+      columnStyles: { 1:{fontStyle:'bold', textColor:GREEN} },
+    });
+
+    const fname = `AcaConnect_Ganancias_${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}.pdf`;
+    doc.save(fname);
+    showToast('✅ Reporte generado: ' + fname);
+  } catch(e) {
+    showToast('❌ Error: ' + e.message); console.error(e);
+  } finally {
+    if (btn) { btn.textContent = '📄 Exportar reporte PDF'; btn.disabled = false; }
+  }
+}
+
+/* =====================================================
+   EXPORTAR REPORTE DE ANALYTICS — PDF
+   ===================================================== */
+
+async function exportarAnalyticsPDF() {
+  const btn = document.querySelector('button[onclick="exportarAnalyticsPDF()"]');
+  if (btn) { btn.textContent = '⏳ Generando...'; btn.disabled = true; }
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF({ orientation: 'portrait', unit:'mm', format:'a4' });
+    const W = doc.internal.pageSize.getWidth();
+    const H = doc.internal.pageSize.getHeight();
+    const now   = new Date();
+    const fecha = now.toLocaleDateString('es-MX',{day:'2-digit',month:'long',year:'numeric'});
+    const hora  = now.toLocaleTimeString('es-MX',{hour:'2-digit',minute:'2-digit'});
+
+    const DARK=[10,31,31]; const WHITE=[255,255,255]; const GRAY=[100,100,100];
+    const PURP=[106,27,154]; const LPURP=[243,229,245]; const TEAL=[0,95,95];
+
+    // Cargar datos
+    const [usuarios, servicios, pagos, eventos] = await Promise.all([
+      supaFetch('/rest/v1/usuarios?select=id,rol,tipo,creado_en'),
+      supaFetch('/rest/v1/servicios?select=id,categoria,estado,creado_en'),
+      supaFetch('/rest/v1/pagos?select=id,metodo_pago,monto,creado_en'),
+      supaFetch('/rest/v1/eventos_analytics?select=tipo,pagina,dispositivo,creado_en&limit=2000').catch(()=>[]),
+    ]);
+
+    const totalU   = (usuarios||[]).length;
+    const totalS   = (servicios||[]).length;
+    const activosS = (servicios||[]).filter(s=>s.estado==='activo').length;
+    const totalP   = (pagos||[]).length;
+    const totalMxn = (pagos||[]).reduce((s,p)=>s+Number(p.monto||0),0);
+    const totalEv  = (eventos||[]).length;
+    const sesiones = new Set((eventos||[]).map(e=>e.sesion_id)).size;
+
+    const dispCount={mobile:0,desktop:0,tablet:0};
+    (eventos||[]).forEach(e=>{ if(dispCount[e.dispositivo]!==undefined) dispCount[e.dispositivo]++; });
+    const dispTotal = Object.values(dispCount).reduce((a,b)=>a+b,0)||1;
+
+    const paginasC={};
+    (eventos||[]).filter(e=>e.tipo==='vista_pagina').forEach(e=>{ paginasC[e.pagina||'home']=(paginasC[e.pagina||'home']||0)+1; });
+    const topPag = Object.entries(paginasC).sort((a,b)=>b[1]-a[1]).slice(0,8);
+
+    const tiposC={};
+    (eventos||[]).forEach(e=>{ tiposC[e.tipo]=(tiposC[e.tipo]||0)+1; });
+
+    const metC={efectivo:0,tarjeta:0,acapoints:0};
+    (pagos||[]).forEach(p=>{ if(metC[p.metodo_pago]!==undefined) metC[p.metodo_pago]++; });
+
+    const rolesC={};
+    (usuarios||[]).forEach(u=>{ const r=u.rol||u.tipo||'cliente'; rolesC[r]=(rolesC[r]||0)+1; });
+
+    // ── Encabezado ──
+    doc.setFillColor(...DARK); doc.rect(0,0,W,42,'F');
+    doc.setFillColor(...TEAL); doc.circle(18,21,9,'F');
+    doc.setTextColor(...WHITE); doc.setFontSize(10); doc.setFont('helvetica','bold');
+    doc.text('AC',18,24,{align:'center'});
+    doc.setFontSize(18); doc.text('AcaConnect',32,18);
+    doc.setFontSize(9); doc.setFont('helvetica','normal');
+    doc.setTextColor(180,220,210); doc.text('Reporte de Analytics y Tráfico',32,25);
+    doc.setTextColor(...WHITE); doc.setFontSize(8);
+    doc.text(`Generado: ${fecha}  ${hora}`,W-14,18,{align:'right'});
+    doc.text(`Admin: ${currentUser?.nombre||'—'}`,W-14,24,{align:'right'});
+
+    // ── KPI boxes ──
+    const kpis2=[
+      {l:'Usuarios',v:String(totalU),c:PURP},
+      {l:'Sesiones',v:String(sesiones),c:[21,101,192]},
+      {l:'Eventos',v:String(totalEv),c:[0,95,95]},
+      {l:'Ingresos',v:'$'+Math.round(totalMxn).toLocaleString('es-MX'),c:[46,125,50]},
+      {l:'Servicios',v:activosS+'/'+totalS,c:[230,81,0]},
+      {l:'Pagos',v:String(totalP),c:[198,40,40]},
+    ];
+    const kW=(W-28)/3;
+    kpis2.forEach((k,i)=>{
+      const row=Math.floor(i/3), col=i%3;
+      const x=14+col*(kW+2), y=48+row*22;
+      doc.setFillColor(...LPURP); doc.roundedRect(x,y,kW,18,3,3,'F');
+      doc.setFillColor(...k.c); doc.roundedRect(x,y,4,18,2,2,'F');
+      doc.setTextColor(...k.c); doc.setFontSize(13); doc.setFont('helvetica','bold');
+      doc.text(k.v,x+kW/2+2,y+10,{align:'center'});
+      doc.setTextColor(...GRAY); doc.setFontSize(7); doc.setFont('helvetica','normal');
+      doc.text(k.l,x+kW/2+2,y+15,{align:'center'});
+    });
+
+    let curY = 94;
+
+    // ── Tabla: Páginas más visitadas ──
+    doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.setTextColor(...DARK);
+    doc.text('Páginas más visitadas', 14, curY); curY += 4;
+    const pagLabels={home:'Inicio',marketplace:'Marketplace',publish:'Publicar',
+      about:'Nosotros',contact:'Contacto',acapoints:'AcaPoints'};
+    doc.autoTable({
+      startY: curY,
+      head:[['Página','Visitas','% del total']],
+      body: topPag.map(([p,n])=>[
+        pagLabels[p]||p, String(n),
+        totalEv>0 ? ((n/totalEv)*100).toFixed(1)+'%' : '0%'
+      ]),
+      theme:'grid',
+      styles:{font:'helvetica',fontSize:8,cellPadding:3,lineColor:[220,220,220],lineWidth:0.2,textColor:[40,40,40]},
+      headStyles:{fillColor:PURP,textColor:WHITE,fontSize:8,fontStyle:'bold',cellPadding:4},
+      alternateRowStyles:{fillColor:[248,245,252]},
+      didDrawPage: () => {
+        doc.setFillColor(...DARK); doc.rect(0,H-10,W,10,'F');
+        doc.setTextColor(...WHITE); doc.setFontSize(7);
+        doc.text('AcaConnect — Reporte Analytics Confidencial',14,H-4);
+        doc.text(`Pág. ${doc.internal.getCurrentPageInfo().pageNumber}`,W-14,H-4,{align:'right'});
+      }
+    });
+    curY = doc.lastAutoTable.finalY + 8;
+
+    // ── Tabla: Dispositivos ──
+    doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.setTextColor(...DARK);
+    doc.text('Tráfico por dispositivo', 14, curY); curY += 4;
+    doc.autoTable({
+      startY: curY,
+      head:[['Dispositivo','Sesiones','Porcentaje']],
+      body:[
+        ['📱 Móvil',    String(dispCount.mobile),  ((dispCount.mobile/dispTotal)*100).toFixed(1)+'%'],
+        ['🖥️ Escritorio',String(dispCount.desktop), ((dispCount.desktop/dispTotal)*100).toFixed(1)+'%'],
+        ['📟 Tablet',   String(dispCount.tablet),  ((dispCount.tablet/dispTotal)*100).toFixed(1)+'%'],
+      ],
+      theme:'grid',
+      styles:{font:'helvetica',fontSize:8,cellPadding:3,lineColor:[220,220,220],lineWidth:0.2,textColor:[40,40,40]},
+      headStyles:{fillColor:[21,101,192],textColor:WHITE,fontSize:8,fontStyle:'bold',cellPadding:4},
+      columnStyles:{2:{fontStyle:'bold',textColor:[21,101,192]}},
+    });
+    curY = doc.lastAutoTable.finalY + 8;
+
+    // ── Tabla: Tipos de evento ──
+    doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.setTextColor(...DARK);
+    doc.text('Actividad por tipo de evento', 14, curY); curY += 4;
+    const evLabels={vista_pagina:'Vista de página',vista_servicio:'Vista de servicio',
+      login:'Inicio de sesión',registro:'Registro',pago:'Pago realizado',click_contacto:'Click contacto'};
+    doc.autoTable({
+      startY: curY,
+      head:[['Tipo de evento','Cantidad','% del total']],
+      body: Object.entries(tiposC).map(([t,n])=>[
+        evLabels[t]||t, String(n),
+        totalEv>0 ? ((n/totalEv)*100).toFixed(1)+'%' : '0%'
+      ]).sort((a,b)=>Number(b[1])-Number(a[1])),
+      theme:'grid',
+      styles:{font:'helvetica',fontSize:8,cellPadding:3,lineColor:[220,220,220],lineWidth:0.2,textColor:[40,40,40]},
+      headStyles:{fillColor:TEAL,textColor:WHITE,fontSize:8,fontStyle:'bold',cellPadding:4},
+      alternateRowStyles:{fillColor:[240,250,248]},
+      columnStyles:{2:{fontStyle:'bold',textColor:[0,95,95]}},
+    });
+    curY = doc.lastAutoTable.finalY + 8;
+
+    // ── Tabla: Roles y métodos de pago ──
+    doc.setFontSize(11); doc.setFont('helvetica','bold'); doc.setTextColor(...DARK);
+    doc.text('Distribución de usuarios y métodos de pago', 14, curY); curY += 4;
+    const rolLbl={admin:'👑 Administrador',supervisor:'🔍 Supervisor',vendedor:'🏪 Vendedor',cliente:'👤 Cliente'};
+    doc.autoTable({
+      startY: curY,
+      head:[['Categoría','Descripción','Cantidad','%']],
+      body:[
+        ...Object.entries(rolesC).map(([r,n])=>['Rol', rolLbl[r]||r, String(n), ((n/totalU)*100).toFixed(1)+'%']),
+        ['—','—','—','—'],
+        ['Pago','💵 Efectivo',   String(metC.efectivo),   totalP>0?((metC.efectivo/totalP)*100).toFixed(1)+'%':'0%'],
+        ['Pago','💳 Tarjeta',    String(metC.tarjeta),    totalP>0?((metC.tarjeta/totalP)*100).toFixed(1)+'%':'0%'],
+        ['Pago','🪙 AcaPoints',  String(metC.acapoints),  totalP>0?((metC.acapoints/totalP)*100).toFixed(1)+'%':'0%'],
+      ],
+      theme:'grid',
+      styles:{font:'helvetica',fontSize:8,cellPadding:3,lineColor:[220,220,220],lineWidth:0.2,textColor:[40,40,40]},
+      headStyles:{fillColor:[46,125,50],textColor:WHITE,fontSize:8,fontStyle:'bold',cellPadding:4},
+      alternateRowStyles:{fillColor:[248,252,250]},
+      columnStyles:{3:{fontStyle:'bold',textColor:[46,125,50]}},
+    });
+
+    const fname = `AcaConnect_Analytics_${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}.pdf`;
+    doc.save(fname);
+    showToast('✅ Reporte generado: ' + fname);
+  } catch(e) {
+    showToast('❌ Error: ' + e.message); console.error(e);
+  } finally {
+    if (btn) { btn.textContent = '📄 Exportar reporte PDF'; btn.disabled = false; }
   }
 }
 
